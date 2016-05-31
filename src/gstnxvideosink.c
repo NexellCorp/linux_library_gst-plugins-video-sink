@@ -1,0 +1,934 @@
+/* GStreamer
+ * Copyright (C) 2016 Biela.Jo <doriya@nexell.co.kr>
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Library General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Library General Public License for more details.
+ *
+ * You should have received a copy of the GNU Library General Public
+ * License along with this library; if not, write to the
+ * Free Software Foundation, Inc., 51 Franklin Street, Suite 500,
+ * Boston, MA 02110-1335, USA.
+ */
+/**
+ * SECTION:element-gstnxvideosink
+ *
+ * The nxvideosink element does FIXME stuff.
+ *
+ * <refsect2>
+ * <title>Example launch line</title>
+ * |[
+ * gst-launch -v fakesrc ! nxvideosink ! FIXME ! fakesink
+ * ]|
+ * FIXME Describe what the pipeline does.
+ * </refsect2>
+ */
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include <gst/gst.h>
+#include <gst/video/video.h>
+#include <gst/video/gstvideosink.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+#include <drm/drm_fourcc.h>
+#include <nexell/nexell_drm.h>
+#include <mm_types.h>
+
+#include "gstnxvideosink.h"
+
+GST_DEBUG_CATEGORY_STATIC (gst_nxvideosink_debug_category);
+#define GST_CAT_DEFAULT gst_nxvideosink_debug_category
+
+/* prototypes */
+
+static void gst_nxvideosink_set_property (GObject * object,
+		guint property_id, const GValue * value, GParamSpec * pspec);
+static void gst_nxvideosink_get_property (GObject * object,
+		guint property_id, GValue * value, GParamSpec * pspec);
+static void gst_nxvideosink_finalize (GObject * object);
+
+static gboolean gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps );
+static GstFlowReturn gst_nxvideosink_show_frame( GstVideoSink *video_sink, GstBuffer *buf );
+
+#define MAX_DISPLAY_WIDTH	2048
+#define MAX_DISPLAY_HEIGHT	1536
+
+enum
+{
+	PROP_0,
+
+	PROP_SRC_X,		// Source Crop
+	PROP_SRC_Y,
+	PROP_SRC_W,
+	PROP_SRC_H,
+
+	PROP_DST_X,		// Destination Position
+	PROP_DST_Y,
+	PROP_DST_W,
+	PROP_DST_H,
+};
+
+/* pad templates */
+
+/* FIXME: add/remove formats you can handle */
+static GstStaticPadTemplate gst_nxvideosink_sink_template =
+	GST_STATIC_PAD_TEMPLATE( "sink",
+		GST_PAD_SINK,
+		GST_PAD_ALWAYS,
+		GST_STATIC_CAPS(
+			"video/x-raw, "
+			"format = (string) { I420 }, "
+			"width = (int) [ 1, 2048 ], "
+			"height = (int) [ 1, 1536 ]; "
+		)
+	);
+
+/* class initialization */
+
+G_DEFINE_TYPE_WITH_CODE (GstNxvideosink, gst_nxvideosink, GST_TYPE_VIDEO_SINK,
+	GST_DEBUG_CATEGORY_INIT (gst_nxvideosink_debug_category, "nxvideosink", 0,
+	"debug category for nxvideosink element"));
+
+static void
+gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
+{
+	GObjectClass *gobject_class = G_OBJECT_CLASS( klass );
+	GstBaseSinkClass *base_sink_class = GST_BASE_SINK_CLASS( klass );
+	GstVideoSinkClass *video_sink_class = GST_VIDEO_SINK_CLASS( klass );
+
+	/* Setting up pads and setting metadata should be moved to
+		 base_class_init if you intend to subclass this class. */
+
+	gst_element_class_add_pad_template( GST_ELEMENT_CLASS(klass),
+			gst_static_pad_template_get(&gst_nxvideosink_sink_template) );
+
+	gst_element_class_set_static_metadata( GST_ELEMENT_CLASS(klass),
+		"S5P6818 H/W Video Renderer",
+		"Renderer/Video",
+		"Nexell H/W Video Renderer for S5P6818",
+		"Biela.Jo <doriya@nexell.co.kr>"
+	);
+
+	gobject_class->set_property = gst_nxvideosink_set_property;
+	gobject_class->get_property = gst_nxvideosink_get_property;
+	gobject_class->finalize = gst_nxvideosink_finalize;
+
+	base_sink_class->set_caps = GST_DEBUG_FUNCPTR( gst_nxvideosink_set_caps );
+
+	video_sink_class->show_frame = GST_DEBUG_FUNCPTR( gst_nxvideosink_show_frame );
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_SRC_X,
+		g_param_spec_int( "src-x", "src-x",
+			"Source Crop X",
+			-MAX_DISPLAY_WIDTH, MAX_DISPLAY_WIDTH, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_SRC_Y,
+		g_param_spec_int( "src-y", "src-y",
+			"Source Crop y",
+			-MAX_DISPLAY_HEIGHT, MAX_DISPLAY_HEIGHT, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_SRC_W,
+		g_param_spec_int( "src-w", "src-w",
+			"Source Crop Width",
+			-MAX_DISPLAY_WIDTH, MAX_DISPLAY_WIDTH, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_SRC_H,
+		g_param_spec_int( "src-h", "src-h",
+			"Source Crop Height",
+			-MAX_DISPLAY_HEIGHT, MAX_DISPLAY_HEIGHT, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_DST_X,
+		g_param_spec_int( "dst-x", "dst-x",
+			"Destination Position X",
+			-MAX_DISPLAY_WIDTH, MAX_DISPLAY_WIDTH, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_DST_Y,
+		g_param_spec_int( "dst-y", "dst-y",
+			"Destination Position y",
+			-MAX_DISPLAY_HEIGHT, MAX_DISPLAY_HEIGHT, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_DST_W,
+		g_param_spec_int( "dst-w", "dst-w",
+			"Destination Position Width",
+			-MAX_DISPLAY_WIDTH, MAX_DISPLAY_WIDTH, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_DST_H,
+		g_param_spec_int( "dst-h", "dst-h",
+			"Destination Position Height",
+			-MAX_DISPLAY_HEIGHT, MAX_DISPLAY_HEIGHT, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+}
+
+static int drm_ioctl( int fd, unsigned long request, void *arg )
+{
+	int ret;
+
+	do {
+		ret = ioctl(fd, request, arg);
+	} while (ret == -1 && (errno == EINTR || errno == EAGAIN));
+
+	return ret;
+}
+
+static int drm_command_write_read( int fd, uint32_t command_index, void *data, uint32_t size )
+{
+	uint32_t request;
+
+	request = DRM_IOC( DRM_IOC_READ|DRM_IOC_WRITE, DRM_IOCTL_BASE, DRM_COMMAND_BASE + command_index, size );
+
+	if (drm_ioctl(fd, request, data))
+		return -errno;
+
+	return 0;
+}
+
+static int alloc_gem(int fd, int size, int flags)
+{
+	struct nx_drm_gem_create arg = { 0, };
+	int ret;
+
+	arg.size = size;
+	arg.flags = flags;
+
+	ret = drm_command_write_read( fd, DRM_NX_GEM_CREATE, &arg, sizeof(arg) );
+	if (ret)
+		return ret;
+
+	return arg.handle;
+}
+
+static void free_gem(int fd, int gem)
+{
+	struct drm_gem_close arg = {0, };
+
+	arg.handle = gem;
+	drm_ioctl(fd, DRM_IOCTL_GEM_CLOSE, &arg);
+}
+
+static int gem_to_dmafd(int fd, int gem_fd)
+{
+	int ret;
+	struct drm_prime_handle arg = {0, };
+
+	arg.handle = gem_fd;
+	ret = drm_ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &arg);
+	if (0 != ret)
+		return -1;
+
+	return arg.fd;
+}
+
+static int import_gem_from_flink( int fd, unsigned int flink_name )
+{
+	struct drm_gem_open arg = { 0, };
+	/* struct nx_drm_gem_info info = { 0, }; */
+
+	arg.name = flink_name;
+	if (drm_ioctl(fd, DRM_IOCTL_GEM_OPEN, &arg)) {
+		return -EINVAL;
+	}
+
+	return arg.handle;
+}
+
+static NX_VID_MEMORY*
+allocate_buffer( int drm_fd, int32_t width, int32_t height )
+{
+	//
+	//	FIX ME! ( 3plane, YUV420 only )
+	//
+	int gem_fd[MAX_PLANE_NUM] = {0, };
+	int dma_fd[MAX_PLANE_NUM] = {0, };
+	int32_t i=0;
+	int32_t luStride, cStride;
+	int32_t luVStride, cVStride;
+	int32_t stride[MAX_PLANE_NUM];
+	int32_t size[MAX_PLANE_NUM];
+	void*	buffer[MAX_PLANE_NUM];
+	NX_VID_MEMORY *video_memory;
+
+	luStride  = GST_ROUND_UP_32( width );
+	luVStride = GST_ROUND_UP_16( height );
+
+	cStride   = GST_ROUND_UP_16( luStride / 2 );
+	cVStride  = GST_ROUND_UP_16( height / 2 );
+
+	//	Buffer 1
+	size[0] = luStride*luVStride;
+	stride[0] = luStride;
+	gem_fd[0] = alloc_gem(drm_fd, size[0], 0);
+	if (gem_fd[0] < 0)
+		goto ErrorExit;
+	dma_fd[0] = gem_to_dmafd(drm_fd, gem_fd[0]);
+	if (dma_fd[0] < 0)
+		goto ErrorExit;
+	buffer[0] = mmap( 0, size[0], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[0], 0 );
+	if (buffer[0] == MAP_FAILED)
+		goto ErrorExit;
+
+	//	Buffer 2
+	size[1] = cStride*cVStride;
+	stride[1] = cStride;
+	gem_fd[1] = alloc_gem(drm_fd, size[1], 0);
+	if (gem_fd[1] < 0)
+		goto ErrorExit;
+	dma_fd[1] = gem_to_dmafd(drm_fd, gem_fd[1]);
+	if (dma_fd[1] < 0)
+		goto ErrorExit;
+	buffer[1] = mmap( 0, size[1], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[1], 0 );
+	if (buffer[0] == MAP_FAILED)
+		goto ErrorExit;
+
+	//	Buffer 3
+	size[2] = cStride*cVStride;
+	stride[2] = cStride;
+	gem_fd[2] = alloc_gem(drm_fd, size[2], 0);
+	if (gem_fd[2] < 0)
+		goto ErrorExit;
+	dma_fd[2] = gem_to_dmafd(drm_fd, gem_fd[2]);
+	if (dma_fd[2] < 0)
+		goto ErrorExit;
+	buffer[2] = mmap( 0, size[2], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[2], 0 );
+	if (buffer[0] == MAP_FAILED)
+		goto ErrorExit;
+
+	video_memory = (NX_VID_MEMORY *)calloc(1, sizeof(NX_VID_MEMORY));
+	video_memory->width  = width;
+	video_memory->height = height;
+	video_memory->drm_fd = drm_fd;
+
+	for( i=0 ; i<3 ; i++ )
+	{
+		video_memory->dma_fd[i] = dma_fd[i];
+		video_memory->gem_fd[i] = gem_fd[i];
+		video_memory->size[i]   = size[i];
+		video_memory->stride[i] = stride[i];
+		video_memory->buffer[i] = buffer[i];
+	}
+	return video_memory;
+
+ErrorExit:
+	for( i=0 ; i<3 ; i++ )
+	{
+		if( buffer[i] )
+		{
+			munmap( buffer[i], size[i] );
+		}
+
+		if( gem_fd[i] > 0 )
+		{
+			free_gem( drm_fd, gem_fd[i] );
+		}
+		if( dma_fd[i] > 0 )
+		{
+			close( dma_fd[i] );
+		}
+	}
+
+	return NULL;
+}
+
+static void
+free_buffer( NX_VID_MEMORY *video_memory )
+{
+	int32_t i;
+	if( video_memory )
+	{
+		for( i = 0; i < 3; i++ )
+		{
+			if( video_memory->buffer[i] )
+			{
+				munmap( video_memory->buffer[i], video_memory->size[i] );
+			}
+
+			free_gem( video_memory->drm_fd, video_memory->gem_fd[i] );
+			close( video_memory->dma_fd[i] );
+		}
+		free( video_memory );
+	}
+}
+
+static void
+copy_to_videomemory( guchar *pBuf, NX_VID_MEMORY *pImage )
+{
+	gint w = pImage->width;
+	gint h = pImage->height;
+	guchar *pSrc, *pDst;
+	gint i, j;
+
+	pSrc = (guchar*)pBuf;
+	pDst = (guchar*)pImage->buffer[0];
+
+	for( i = 0; i < h; i++ )
+	{
+		memcpy( pDst, pSrc, w );
+
+		pSrc += w;
+		pDst += pImage->stride[0];
+	}
+
+	for( j = 1; j < 3; j++ )
+	{
+		pDst = (guchar*)pImage->buffer[j];
+		for( i = 0; i < h / 2; i++ )
+		{
+			memcpy( pDst, pSrc, w / 2 );
+			pSrc += w / 2;
+			pDst += pImage->stride[j];
+		}
+	}
+}
+
+static void
+gst_nxvideosink_init( GstNxvideosink *nxvideosink )
+{
+	gint i = 0;
+
+	nxvideosink->width  = 0;
+	nxvideosink->height = 0;
+
+	nxvideosink->src_x  = 0;
+	nxvideosink->src_y  = 0;
+	nxvideosink->src_w  = 0;
+	nxvideosink->src_h  = 0;
+
+	nxvideosink->dst_x  = 0;
+	nxvideosink->dst_y  = 0;
+	nxvideosink->dst_w  = 0;
+	nxvideosink->dst_h  = 0;
+
+	nxvideosink->drm_fd      = -1;
+	nxvideosink->plane_id    = 17;
+	nxvideosink->ctrl_id     = 22;
+	nxvideosink->index       = 0;
+	nxvideosink->buffer_type = -1; // MM_VIDEO_BUFFER_TYPE_GEM;
+
+	nxvideosink->prv_buf     = NULL;
+
+	for( i = 0 ; i < MAX_INPUT_BUFFER; i++ )
+	{
+		nxvideosink->buffer_id[i] = 0;
+		nxvideosink->video_memory[i] = NULL;
+	}
+
+	//
+	// FIX ME!! ( DO NOT MOVE THIS CODE )
+	//   It is seems to be bugs.
+	//   If this drmOpen() is called late than another drmOpen(), drmModeSetPlane() is failed.
+	//
+	if( 0 > nxvideosink->drm_fd )
+	{
+		nxvideosink->drm_fd = drmOpen( "nexell", "/dev/dri/card0" );
+
+		if( 0 > drmSetMaster( nxvideosink->drm_fd ) )
+		{
+			GST_ERROR("Fail, drmSetMaster().\n" );
+		}
+	}
+
+	if( 0 > nxvideosink->drm_fd )
+	{
+		GST_ERROR("Fail, open drm device.\n");
+	}
+}
+
+void
+gst_nxvideosink_set_property (GObject * object, guint property_id,
+		const GValue * value, GParamSpec * pspec)
+{
+	GstNxvideosink *nxvideosink = GST_NXVIDEOSINK (object);
+
+	GST_DEBUG_OBJECT( nxvideosink, "set_property" );
+
+	switch (property_id) {
+		case PROP_SRC_X:
+			nxvideosink->src_x = g_value_get_int( value );
+			break;
+
+		case PROP_SRC_Y:
+			nxvideosink->src_y = g_value_get_int( value );
+			break;
+
+		case PROP_SRC_W:
+			nxvideosink->src_w = g_value_get_int( value );
+			break;
+
+		case PROP_SRC_H:
+			nxvideosink->src_h = g_value_get_int( value );
+			break;
+
+		case PROP_DST_X:
+			nxvideosink->dst_x = g_value_get_int( value );
+			break;
+
+		case PROP_DST_Y:
+			nxvideosink->dst_y = g_value_get_int( value );
+			break;
+
+		case PROP_DST_W:
+			nxvideosink->dst_w = g_value_get_int( value );
+			break;
+
+		case PROP_DST_H:
+			nxvideosink->dst_h = g_value_get_int( value );
+			break;
+
+		default:
+			G_OBJECT_WARN_INVALID_PROPERTY_ID( object, property_id, pspec );
+			break;
+	}
+}
+
+void
+gst_nxvideosink_get_property (GObject * object, guint property_id,
+		GValue * value, GParamSpec * pspec)
+{
+	GstNxvideosink *nxvideosink = GST_NXVIDEOSINK (object);
+
+	GST_DEBUG_OBJECT( nxvideosink, "get_property" );
+
+	switch (property_id) {
+		case PROP_SRC_X:
+			g_value_set_int( value, nxvideosink->src_x );
+			break;
+
+		case PROP_SRC_Y:
+			g_value_set_int( value, nxvideosink->src_y );
+			break;
+
+		case PROP_SRC_W:
+			g_value_set_int( value, nxvideosink->src_w );
+			break;
+
+		case PROP_SRC_H:
+			g_value_set_int( value, nxvideosink->src_h );
+			break;
+
+		case PROP_DST_X:
+			g_value_set_int( value, nxvideosink->dst_x );
+			break;
+
+		case PROP_DST_Y:
+			g_value_set_int( value, nxvideosink->dst_y );
+			break;
+
+		case PROP_DST_W:
+			g_value_set_int( value, nxvideosink->dst_w );
+			break;
+
+		case PROP_DST_H:
+			g_value_set_int( value, nxvideosink->dst_h );
+			break;
+
+		default:
+			G_OBJECT_WARN_INVALID_PROPERTY_ID( object, property_id, pspec );
+			break;
+	}
+}
+
+void
+gst_nxvideosink_finalize (GObject * object)
+{
+	GstNxvideosink *nxvideosink = GST_NXVIDEOSINK (object);
+	gint i;
+
+	GST_DEBUG_OBJECT( nxvideosink, "finalize" );
+
+	/* clean up object here */
+	for( i = 0; i < MAX_INPUT_BUFFER; i++ )
+	{
+		if( 0 < nxvideosink->buffer_id[i] )
+		{
+			drmModeRmFB( nxvideosink->drm_fd, nxvideosink->buffer_id[i] );
+			nxvideosink->buffer_id[i] = 0;
+		}
+	}
+
+	if( MM_VIDEO_BUFFER_TYPE_GEM != nxvideosink->buffer_type )
+	{
+		for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
+		{
+			free_buffer( nxvideosink->video_memory[i] );
+		}
+	}
+
+	if( 0 <= nxvideosink->drm_fd )
+	{
+		drmClose( nxvideosink->drm_fd );
+		nxvideosink->drm_fd = -1;
+	}
+
+	G_OBJECT_CLASS (gst_nxvideosink_parent_class)->finalize (object);
+}
+
+static gboolean
+gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
+{
+	GstNxvideosink *nxvideosink = GST_NXVIDEOSINK( base_sink );
+	GstStructure *structure;
+	gint i;
+
+	const gchar *mime_type;
+	const gchar *format;
+
+	GST_DEBUG_OBJECT( nxvideosink, "set_caps" );
+
+	structure = gst_caps_get_structure( caps, 0 );
+	mime_type = gst_structure_get_name( structure );
+	if( !g_strcmp0( mime_type, "video/x-raw" ) )
+	{
+		format = gst_structure_get_string( structure, "format" );
+	}
+	else
+	{
+		return FALSE;
+	}
+
+	if( !gst_structure_get_int( structure, "width", &nxvideosink->width ) )
+	{
+		return FALSE;
+	}
+
+	if( !gst_structure_get_int( structure, "height", &nxvideosink->height ) )
+	{
+		return FALSE;
+	}
+
+	if( !gst_structure_get_int( structure, "buffer-type", &nxvideosink->buffer_type) )
+	{
+
+	}
+
+	GST_DEBUG_OBJECT(nxvideosink, "mime_type( %s ), format( %s ), buffer_type( %d ), width( %d ), height( %d )\n",
+		mime_type, format, nxvideosink->buffer_type, nxvideosink->width, nxvideosink->height );
+
+	if( nxvideosink->width <= 1 || nxvideosink->height <= 1 )
+	{
+		return FALSE;
+	}
+
+	nxvideosink->src_x  = nxvideosink->src_x;
+	nxvideosink->src_y  = nxvideosink->src_y;
+	nxvideosink->src_w  = nxvideosink->src_w ? nxvideosink->src_w : nxvideosink->width;
+	nxvideosink->src_h  = nxvideosink->src_h ? nxvideosink->src_h : nxvideosink->height;
+
+	nxvideosink->dst_x  = nxvideosink->dst_x;
+	nxvideosink->dst_y  = nxvideosink->dst_y;
+	nxvideosink->dst_w  = nxvideosink->dst_w ? nxvideosink->dst_w : nxvideosink->width;
+	nxvideosink->dst_h  = nxvideosink->dst_h ? nxvideosink->dst_h : nxvideosink->height;
+
+	//
+	//
+	//
+	// if( 0 > nxvideosink->drm_fd )
+	// {
+	// 	// nxvideosink->drm_fd = open("/dev/dri/card0", O_RDWR);
+	// 	nxvideosink->drm_fd = drmOpen( "nexell", "/dev/dri/card0" );
+
+	// 	if( 0 > drmSetMaster( nxvideosink->drm_fd ) )
+	// 	{
+	// 		GST_ERROR("Fail, drmSetMaster().\n" );
+	// 	}
+	// }
+
+	// if( 0 > nxvideosink->drm_fd )
+	// {
+	// 	GST_ERROR("Fail, open drm device.\n");
+	// 	return FALSE;
+	// }
+
+	if( 0 > drmSetClientCap(nxvideosink->drm_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) )
+	{
+		drmClose( nxvideosink->drm_fd );
+		nxvideosink->drm_fd = -1;
+
+		GST_ERROR("Fail, drmSetClientCap().\n");
+		return FALSE;
+	}
+
+	for( i = 0; i < MAX_INPUT_BUFFER; i++ )
+	{
+		nxvideosink->buffer_id[i] = 0;
+	}
+
+	if( MM_VIDEO_BUFFER_TYPE_GEM != nxvideosink->buffer_type )
+	{
+		for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
+		{
+			nxvideosink->video_memory[i] = allocate_buffer( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height );
+			if( NULL == nxvideosink->video_memory[i] )
+			{
+				GST_ERROR("Fail, Allocate Buffer.\n");
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+static GstFlowReturn
+gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
+{
+	GstNxvideosink *nxvideosink = GST_NXVIDEOSINK( sink );
+
+	GstFlowReturn ret = GST_FLOW_OK;
+	GstMapInfo info;
+	GstMemory *meta_block = NULL;
+	MMVideoBuffer *mm_buf = NULL;
+
+	gint err;
+
+	GST_DEBUG_OBJECT( nxvideosink, "show_frame" );
+
+	if( nxvideosink->prv_buf == buf )
+	{
+		return GST_FLOW_OK;
+	}
+
+	gst_buffer_ref( buf );
+
+	if( MM_VIDEO_BUFFER_TYPE_GEM == nxvideosink->buffer_type )
+	{
+		memset(&info, 0, sizeof(GstMapInfo));
+
+		meta_block = gst_buffer_peek_memory(buf, 0);
+		if( !meta_block )
+		{
+			GST_ERROR("Fail, gst_buffer_peek_memory().\n");
+		}
+
+		gst_memory_map(meta_block, &info, GST_MAP_READ);
+
+		mm_buf = (MMVideoBuffer*)info.data;
+		if( !mm_buf )
+		{
+			GST_ERROR("Fail, get MMVideoBuffer.\n");
+		}
+		else
+		{
+			GST_DEBUG_OBJECT( nxvideosink, "type: 0x%x, width: %d, height: %d, plane_num: %d, handle_num: %d, index: %d\n",
+					mm_buf->type, mm_buf->width[0], mm_buf->height[0], mm_buf->plane_num, mm_buf->handle_num, mm_buf->buffer_index );
+
+			if( 0 > mm_buf->buffer_index )
+			{
+				gst_memory_unmap( meta_block, &info );
+				gst_buffer_unref( buf );
+				return GST_FLOW_OK;
+			}
+
+			if( nxvideosink->buffer_id[mm_buf->buffer_index] == 0 )
+			{
+				guint handles[4], pitches[4], offsets[4];
+
+				if( 3 == mm_buf->plane_num && 1 == mm_buf->handle_num )
+				{
+					handles[0] = import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[0] );
+					handles[1] = handles[0];
+					handles[2] = handles[0];
+					handles[3] = 0;
+
+					pitches[0] = mm_buf->stride_width[0];
+					pitches[1] = mm_buf->stride_width[1];
+					pitches[2] = mm_buf->stride_width[2];
+					pitches[3] = 0;
+
+					offsets[0] = 0;
+					offsets[1] = offsets[0] + mm_buf->stride_width[0] * mm_buf->stride_height[0];
+					offsets[2] = offsets[1] + mm_buf->stride_width[1] * mm_buf->stride_height[1];
+					offsets[3] = 0;
+				}
+				else if( 3 == mm_buf->plane_num && 3 == mm_buf->handle_num )
+				{
+					handles[0] = import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[0] );
+					handles[1] = import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[1] );
+					handles[2] = import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[2] );
+					handles[3] = 0;
+
+					pitches[0] = mm_buf->stride_width[0];
+					pitches[1] = mm_buf->stride_width[1];
+					pitches[2] = mm_buf->stride_width[2];
+					pitches[3] = 0;
+
+					offsets[0] = 0;
+					offsets[1] = 0;
+					offsets[2] = 0;
+					offsets[3] = 0;
+				}
+				else
+				{
+					GST_ERROR("Fail, Not support plane(%d) or handle(%d)\n", mm_buf->plane_num, mm_buf->handle_num );
+					gst_memory_unmap( meta_block, &info );
+					gst_buffer_unref( buf );
+					return GST_FLOW_ERROR;
+				}
+
+				err = drmModeAddFB2( nxvideosink->drm_fd, mm_buf->width[0], mm_buf->height[0],
+					DRM_FORMAT_YUV420, handles, pitches, offsets, &nxvideosink->buffer_id[mm_buf->buffer_index], 0 );
+
+				if( 0 > err )
+				{
+					GST_ERROR("Fail, drmModeAddFB2() ( %s ).\n", strerror(err) );
+					gst_memory_unmap( meta_block, &info );
+					gst_buffer_unref( buf );
+					return GST_FLOW_ERROR;
+				}
+			}
+
+			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->ctrl_id, nxvideosink->buffer_id[mm_buf->buffer_index], 0,
+					nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
+					nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+
+			if( 0 > err )
+			{
+				GST_ERROR("Fail, drmModeSetPlane() ( %s ).\n", strerror(err) );
+				gst_memory_unmap( meta_block, &info );
+				gst_buffer_unref( buf );
+				return GST_FLOW_ERROR;
+			}
+
+			gst_memory_unmap( meta_block, &info );
+		}
+	}
+	else
+	{
+		if( gst_buffer_map( buf, &info, GST_MAP_READ ) )
+		{
+			copy_to_videomemory( info.data, nxvideosink->video_memory[nxvideosink->index] );
+
+			if( nxvideosink->buffer_id[nxvideosink->index] == 0 )
+			{
+				guint handles[4], pitches[4], offsets[4];
+
+				handles[0] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[0];
+				handles[1] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[1];
+				handles[2] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[2];
+				handles[3] = 0;
+
+				pitches[0] = nxvideosink->video_memory[nxvideosink->index]->stride[0];
+				pitches[1] = nxvideosink->video_memory[nxvideosink->index]->stride[1];
+				pitches[2] = nxvideosink->video_memory[nxvideosink->index]->stride[2];
+				pitches[3] = 0;
+
+				offsets[0] = 0;
+				offsets[1] = 0;
+				offsets[2] = 0;
+				offsets[3] = 0;
+
+				err = drmModeAddFB2( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height,
+					DRM_FORMAT_YUV420, handles, pitches, offsets, &nxvideosink->buffer_id[nxvideosink->index], 0 );
+
+				if( 0 > err )
+				{
+					GST_ERROR("Fail, drmModeAddFB2() ( %d ).\n", err );
+					gst_buffer_unref( buf );
+					return GST_FLOW_ERROR;
+				}
+			}
+
+			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->ctrl_id, nxvideosink->buffer_id[nxvideosink->index], 0,
+					nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
+					nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+
+			if( 0 > err )
+			{
+				GST_ERROR("Fail, drmModeSetPlane() ( %d ).\n", err );
+				gst_buffer_unref( buf );
+				return GST_FLOW_ERROR;
+			}
+
+			nxvideosink->index = (nxvideosink->index + 1) % MAX_ALLOC_BUFFER;
+
+			gst_buffer_unmap( buf, &info );
+		}
+	}
+
+	if( nxvideosink->prv_buf )
+	{
+		gst_buffer_unref( nxvideosink->prv_buf );
+	}
+
+	nxvideosink->prv_buf = buf;
+
+	return ret;
+}
+
+static gboolean
+plugin_init (GstPlugin * plugin)
+{
+
+	/* FIXME Remember to set the rank if it's an element that is meant
+		 to be autoplugged by decodebin. */
+	return gst_element_register( plugin, "nxvideosink", GST_RANK_NONE,
+			GST_TYPE_NXVIDEOSINK );
+}
+
+/* FIXME: these are normally defined by the GStreamer build system.
+	 If you are creating an element to be included in gst-plugins-*,
+	 remove these, as they're always defined.  Otherwise, edit as
+	 appropriate for your external plugin package. */
+#ifndef VERSION
+#define VERSION "0.1.0"
+#endif
+#ifndef PACKAGE
+#define PACKAGE "S5P6818 GStreamer PlugIn"
+#endif
+#ifndef PACKAGE_NAME
+#define PACKAGE_NAME "S5P6818 GStreamer PlugIn"
+#endif
+#ifndef GST_PACKAGE_ORIGIN
+#define GST_PACKAGE_ORIGIN "http://www.nexell.co.kr"
+#endif
+
+GST_PLUGIN_DEFINE(
+	GST_VERSION_MAJOR,
+	GST_VERSION_MINOR,
+	nxvideosink,
+	"Nexell H/W Video Renderer for S5P6818",
+	plugin_init, VERSION,
+	"LGPL",
+	PACKAGE_NAME,
+	GST_PACKAGE_ORIGIN
+)
+
