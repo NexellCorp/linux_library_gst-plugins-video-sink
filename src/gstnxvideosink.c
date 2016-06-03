@@ -98,6 +98,8 @@ static GstStaticPadTemplate gst_nxvideosink_sink_template =
 			"format = (string) { I420 }, "
 			"width = (int) [ 1, 2048 ], "
 			"height = (int) [ 1, 1536 ]; "
+
+			"video/x-raw, accelerable = (boolean) true; "
 		)
 	);
 
