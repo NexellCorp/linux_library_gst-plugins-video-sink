@@ -29,12 +29,6 @@ AC_CHECK_PROG(HAVE_PKGCONFIG, pkg-config, [ ], [
   AC_MSG_ERROR([You need to have pkg-config installed!])
 ])
 
-dnl Add Nexell Private Direcotries
-GST_ROOT=$(pwd)
-GST_SYSROOT=$(pwd)/../buildroot/output/staging
-GST_CFLAGS="-I$GST_SYSROOT/usr/include -I$GST_SYSROOT/usr/include/gstreamer-1.0 -I$GST_SYSROOT/usr/include/glib-2.0 -I$GST_SYSROOT/usr/lib/glib-2.0/include -I$GST_ROOT/src/include"
-GST_LIBS="-L$GST_SYSROOT/usr/lib -L$GST_SYSROOT/lib -L$GST_ROOT/src/lib --sysroot=$GST_SYSROOT"
-
 dnl our libraries and install dirs use GST_API_VERSION in the filename
 dnl to allow side-by-side installation of different API versions
 GST_API_VERSION=1.0
