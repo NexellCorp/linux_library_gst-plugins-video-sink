@@ -17,8 +17,8 @@ libgstnxvideosink_la_SOURCES = \
 # compiler and linker flags used to compile this plugin, set in configure.ac
 libgstnxvideosink_la_CFLAGS = \
 	$(GST_CFLAGS)		\
-	-I./include			\
-	-I./include/drm		\
+	-I${includedir}		\
+	-I${includedir}/drm	\
 	-I../../sysroot/include	\
 	-I../../sysroot/include/libdrm
 
