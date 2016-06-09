@@ -18,20 +18,17 @@ libgstnxvideosink_la_SOURCES = \
 libgstnxvideosink_la_CFLAGS = \
 	$(GST_CFLAGS)		\
 	-I${includedir}		\
-	-I${includedir}/drm	\
-	-I../../sysroot/include	\
-	-I../../sysroot/include/libdrm
+	-I${includedir}/libdrm
 
 libgstnxvideosink_la_LIBADD = \
 	$(GST_LIBS)			\
 	-lgstvideo-1.0		\
 	-lgstpbutils-1.0	\
-	-L../../sysroot/lib	\
 	-ldrm	\
 	-lkms
 
 libgstnxvideosink_la_LDFLAGS =	\
-	$(GST_PLUGIN_LDFLAGS)
+	$(GST_PLUGIN_LDFLAGS) -L$(libdir)
 
 libgstnxvideosink_la_LIBTOOLFLAGS = --tag=disable-static
 
