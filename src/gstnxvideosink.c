@@ -461,7 +461,8 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	//
 	if( 0 > nxvideosink->drm_fd )
 	{
-		nxvideosink->drm_fd = drmOpen( "nexell", "/dev/dri/card0" );
+		// nxvideosink->drm_fd = drmOpen( "nexell", "/dev/dri/card0" );
+		nxvideosink->drm_fd = open( "/dev/dri/card0", O_RDWR );
 
 		if( 0 > drmSetMaster( nxvideosink->drm_fd ) )
 		{
