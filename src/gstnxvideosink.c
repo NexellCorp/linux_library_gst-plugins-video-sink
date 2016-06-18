@@ -98,8 +98,6 @@ static GstStaticPadTemplate gst_nxvideosink_sink_template =
 			"format = (string) { I420 }, "
 			"width = (int) [ 1, 2048 ], "
 			"height = (int) [ 1, 1536 ]; "
-
-			"video/x-raw, accelerable = (boolean) true; "
 		)
 	);
 
@@ -427,26 +425,25 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 {
 	gint i = 0;
 
-	nxvideosink->width  = 0;
-	nxvideosink->height = 0;
+	nxvideosink->width    = 0;
+	nxvideosink->height   = 0;
 
-	nxvideosink->src_x  = 0;
-	nxvideosink->src_y  = 0;
-	nxvideosink->src_w  = 0;
-	nxvideosink->src_h  = 0;
+	nxvideosink->src_x    = 0;
+	nxvideosink->src_y    = 0;
+	nxvideosink->src_w    = 0;
+	nxvideosink->src_h    = 0;
 
-	nxvideosink->dst_x  = 0;
-	nxvideosink->dst_y  = 0;
-	nxvideosink->dst_w  = 0;
-	nxvideosink->dst_h  = 0;
+	nxvideosink->dst_x    = 0;
+	nxvideosink->dst_y    = 0;
+	nxvideosink->dst_w    = 0;
+	nxvideosink->dst_h    = 0;
 
-	nxvideosink->drm_fd      = -1;
-	nxvideosink->plane_id    = 17;
-	nxvideosink->ctrl_id     = 22;
-	nxvideosink->index       = 0;
-	nxvideosink->buffer_type = -1; // MM_VIDEO_BUFFER_TYPE_GEM;
-
-	nxvideosink->prv_buf     = NULL;
+	nxvideosink->drm_fd   = -1;
+	nxvideosink->plane_id = 17;
+	nxvideosink->ctrl_id  = 22;
+	nxvideosink->index    = 0;
+	nxvideosink->init     = FALSE;
+	nxvideosink->prv_buf  = NULL;
 
 	for( i = 0 ; i < MAX_INPUT_BUFFER; i++ )
 	{
@@ -461,8 +458,7 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	//
 	if( 0 > nxvideosink->drm_fd )
 	{
-		// nxvideosink->drm_fd = drmOpen( "nexell", "/dev/dri/card0" );
-		nxvideosink->drm_fd = open( "/dev/dri/card0", O_RDWR );
+		nxvideosink->drm_fd = drmOpen( "nexell", NULL );
 
 		if( 0 > drmSetMaster( nxvideosink->drm_fd ) )
 		{
@@ -588,9 +584,9 @@ gst_nxvideosink_finalize (GObject * object)
 		}
 	}
 
-	if( MM_VIDEO_BUFFER_TYPE_GEM != nxvideosink->buffer_type )
+	for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
 	{
-		for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
+		if( NULL != nxvideosink->video_memory[i] )
 		{
 			free_buffer( nxvideosink->video_memory[i] );
 		}
@@ -638,13 +634,8 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 		return FALSE;
 	}
 
-	if( !gst_structure_get_int( structure, "buffer-type", &nxvideosink->buffer_type) )
-	{
-
-	}
-
-	GST_DEBUG_OBJECT(nxvideosink, "mime_type( %s ), format( %s ), buffer_type( %d ), width( %d ), height( %d )\n",
-		mime_type, format, nxvideosink->buffer_type, nxvideosink->width, nxvideosink->height );
+	GST_DEBUG_OBJECT(nxvideosink, "mime_type( %s ), format( %s ), width( %d ), height( %d )\n",
+		mime_type, format, nxvideosink->width, nxvideosink->height );
 
 	if( nxvideosink->width <= 1 || nxvideosink->height <= 1 )
 	{
@@ -695,19 +686,6 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 		nxvideosink->buffer_id[i] = 0;
 	}
 
-	if( MM_VIDEO_BUFFER_TYPE_GEM != nxvideosink->buffer_type )
-	{
-		for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
-		{
-			nxvideosink->video_memory[i] = allocate_buffer( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height );
-			if( NULL == nxvideosink->video_memory[i] )
-			{
-				GST_ERROR("Fail, Allocate Buffer.\n");
-				return FALSE;
-			}
-		}
-	}
-
 	return TRUE;
 }
 
@@ -732,7 +710,7 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 
 	gst_buffer_ref( buf );
 
-	if( MM_VIDEO_BUFFER_TYPE_GEM == nxvideosink->buffer_type )
+	if( 2 <= gst_buffer_n_memory(buf) )
 	{
 		memset(&info, 0, sizeof(GstMapInfo));
 
@@ -836,6 +814,22 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 	}
 	else
 	{
+		if( FALSE == nxvideosink->init )
+		{
+			gint i = 0;
+			for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
+			{
+				nxvideosink->video_memory[i] = allocate_buffer( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height );
+				if( NULL == nxvideosink->video_memory[i] )
+				{
+					GST_ERROR("Fail, Allocate Buffer.\n");
+					return FALSE;
+				}
+			}
+
+			nxvideosink->init = TRUE;
+		}
+
 		if( gst_buffer_map( buf, &info, GST_MAP_READ ) )
 		{
 			copy_to_videomemory( info.data, nxvideosink->video_memory[nxvideosink->index] );

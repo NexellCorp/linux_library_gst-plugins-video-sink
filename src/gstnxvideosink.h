@@ -70,7 +70,7 @@ struct _GstNxvideosink
 	guint	ctrl_id;
 	guint	buffer_id[MAX_INPUT_BUFFER];
 	gint	index;
-	gint	buffer_type;
+	gboolean init;
 
 	NX_VID_MEMORY *video_memory[MAX_INPUT_BUFFER];
 	GstBuffer *prv_buf;
