@@ -464,12 +464,7 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 		GST_ERROR("Fail, drmOpen().\n");
 	}
 
-	if( 0 > drmSetMaster(nxvideosink->drm_fd) )
-	{
-		GST_ERROR("Fail, DRM drmSetMaster().\n");
-		drmClose( nxvideosink->drm_fd );
-		nxvideosink->drm_fd = -1;
-	}
+	drmSetMaster( nxvideosink->drm_fd );
 
 	gst_pad_set_event_function( GST_VIDEO_SINK_PAD(nxvideosink), gst_nxvideosink_event );
 }
@@ -662,13 +657,7 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 	// 	return FALSE;
 	// }
 
-	// if( 0 > drmSetMaster(nxvideosink->drm_fd) )
-	// {
-	// 	GST_ERROR("Fail, DRM drmSetMaster().\n");
-	// 	drmClose( nxvideosink->drm_fd );
-	// 	nxvideosink->drm_fd = -1;
-	// 	return FALSE;
-	// }
+	// drmSetMaster( nxvideosink->drm_fd );
 
 	if( 0 > drmSetClientCap(nxvideosink->drm_fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) )
 	{
