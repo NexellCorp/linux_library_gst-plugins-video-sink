@@ -69,7 +69,7 @@ static gboolean gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps 
 static GstFlowReturn gst_nxvideosink_show_frame( GstVideoSink *video_sink, GstBuffer *buf );
 
 #define MAX_DISPLAY_WIDTH	2048
-#define MAX_DISPLAY_HEIGHT	1536
+#define MAX_DISPLAY_HEIGHT	2048
 
 enum
 {
@@ -97,7 +97,7 @@ static GstStaticPadTemplate gst_nxvideosink_sink_template =
 			"video/x-raw, "
 			"format = (string) { I420 }, "
 			"width = (int) [ 1, 2048 ], "
-			"height = (int) [ 1, 1536 ]; "
+			"height = (int) [ 1, 2048 ]; "
 		)
 	);
 
@@ -138,7 +138,7 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_SRC_X,
 		g_param_spec_int( "src-x", "src-x",
 			"Source Crop X",
-			-MAX_DISPLAY_WIDTH, MAX_DISPLAY_WIDTH, 0,
+			0, MAX_DISPLAY_WIDTH, 0,
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
@@ -146,7 +146,7 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_SRC_Y,
 		g_param_spec_int( "src-y", "src-y",
 			"Source Crop y",
-			-MAX_DISPLAY_HEIGHT, MAX_DISPLAY_HEIGHT, 0,
+			0, MAX_DISPLAY_HEIGHT, 0,
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
@@ -154,7 +154,7 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_SRC_W,
 		g_param_spec_int( "src-w", "src-w",
 			"Source Crop Width",
-			-MAX_DISPLAY_WIDTH, MAX_DISPLAY_WIDTH, 0,
+			0, MAX_DISPLAY_WIDTH, 0,
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
@@ -162,7 +162,7 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_SRC_H,
 		g_param_spec_int( "src-h", "src-h",
 			"Source Crop Height",
-			-MAX_DISPLAY_HEIGHT, MAX_DISPLAY_HEIGHT, 0,
+			0, MAX_DISPLAY_HEIGHT, 0,
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
@@ -621,24 +621,16 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 	}
 	else
 	{
+		GST_ERROR("Fail, Not Support Format.\n");
 		return FALSE;
 	}
 
-	if( !gst_structure_get_int( structure, "width", &nxvideosink->width ) )
-	{
-		return FALSE;
-	}
+	gst_structure_get_int( structure, "width", &nxvideosink->width );
+	gst_structure_get_int( structure, "height", &nxvideosink->height );
 
-	if( !gst_structure_get_int( structure, "height", &nxvideosink->height ) )
+	if( nxvideosink->width < 1 || nxvideosink->height < 1 )
 	{
-		return FALSE;
-	}
-
-	GST_DEBUG_OBJECT(nxvideosink, "mime_type( %s ), format( %s ), width( %d ), height( %d )\n",
-		mime_type, format, nxvideosink->width, nxvideosink->height );
-
-	if( nxvideosink->width <= 1 || nxvideosink->height <= 1 )
-	{
+		GST_ERROR("Fail, Not Support Resolution.( %d x %d )\n", nxvideosink->width, nxvideosink->height );
 		return FALSE;
 	}
 
@@ -651,6 +643,12 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 	nxvideosink->dst_y  = nxvideosink->dst_y;
 	nxvideosink->dst_w  = nxvideosink->dst_w ? nxvideosink->dst_w : nxvideosink->width;
 	nxvideosink->dst_h  = nxvideosink->dst_h ? nxvideosink->dst_h : nxvideosink->height;
+
+	GST_DEBUG_OBJECT(nxvideosink, "mime( %s ), format( %s ), width( %d ), height( %d ), src( %d, %d, %d, %d ), dst( %d, %d, %d, %d )\n",
+		mime_type, format, nxvideosink->width, nxvideosink->height,
+		nxvideosink->src_x, nxvideosink->src_y, nxvideosink->src_w, nxvideosink->src_h,
+		nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h
+	);
 
 	//
 	//
