@@ -456,19 +456,17 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	//   It is seems to be bugs.
 	//   If this drmOpen() is called late than another drmOpen(), drmModeSetPlane() is failed.
 	//
+	nxvideosink->drm_fd = drmOpen( "nexell", NULL );
 	if( 0 > nxvideosink->drm_fd )
 	{
-		nxvideosink->drm_fd = drmOpen( "nexell", NULL );
-
-		if( 0 > drmSetMaster( nxvideosink->drm_fd ) )
-		{
-			GST_ERROR("Fail, drmSetMaster().\n" );
-		}
+		GST_ERROR("Fail, drmOpen().\n");
 	}
 
-	if( 0 > nxvideosink->drm_fd )
+	if( 0 > drmSetMaster(nxvideosink->drm_fd) )
 	{
-		GST_ERROR("Fail, open drm device.\n");
+		GST_ERROR("Fail, DRM drmSetMaster().\n");
+		drmClose( nxvideosink->drm_fd );
+		nxvideosink->drm_fd = -1;
 	}
 }
 
@@ -653,20 +651,18 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 	//
 	//
 	//
+	// nxvideosink->drm_fd = drmOpen( "nexell", NULL );
 	// if( 0 > nxvideosink->drm_fd )
 	// {
-	// 	// nxvideosink->drm_fd = open("/dev/dri/card0", O_RDWR);
-	// 	nxvideosink->drm_fd = drmOpen( "nexell", "/dev/dri/card0" );
-
-	// 	if( 0 > drmSetMaster( nxvideosink->drm_fd ) )
-	// 	{
-	// 		GST_ERROR("Fail, drmSetMaster().\n" );
-	// 	}
+	// 	GST_ERROR("Fail, drmOpen().\n");
+	// 	return FALSE;
 	// }
 
-	// if( 0 > nxvideosink->drm_fd )
+	// if( 0 > drmSetMaster(nxvideosink->drm_fd) )
 	// {
-	// 	GST_ERROR("Fail, open drm device.\n");
+	// 	GST_ERROR("Fail, DRM drmSetMaster().\n");
+	// 	drmClose( nxvideosink->drm_fd );
+	// 	nxvideosink->drm_fd = -1;
 	// 	return FALSE;
 	// }
 
