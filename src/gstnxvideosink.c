@@ -66,6 +66,8 @@ static void gst_nxvideosink_get_property (GObject * object,
 static void gst_nxvideosink_finalize (GObject * object);
 
 static gboolean gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps );
+static gboolean gst_nxvideosink_event( GstPad *pad, GstObject *parent, GstEvent *event );
+
 static GstFlowReturn gst_nxvideosink_show_frame( GstVideoSink *video_sink, GstBuffer *buf );
 
 #define MAX_DISPLAY_WIDTH	2048
@@ -468,6 +470,8 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 		drmClose( nxvideosink->drm_fd );
 		nxvideosink->drm_fd = -1;
 	}
+
+	gst_pad_set_event_function( GST_VIDEO_SINK_PAD(nxvideosink), gst_nxvideosink_event );
 }
 
 void
@@ -681,6 +685,79 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 	}
 
 	return TRUE;
+}
+
+static gboolean
+gst_nxvideosink_event( GstPad *pad, GstObject *parent, GstEvent *event )
+{
+	GstBaseSink *base_sink = GST_BASE_SINK_CAST( parent );
+	GstBaseSinkClass *base_class = GST_BASE_SINK_GET_CLASS( base_sink );
+	GstNxvideosink *nxvideosink = GST_NXVIDEOSINK( base_sink );
+
+	gboolean result = TRUE;
+
+	GST_DEBUG_OBJECT( nxvideosink, "received event %p %" GST_PTR_FORMAT, event, event );
+
+	switch( GST_EVENT_TYPE( event ) )
+	{
+		case GST_EVENT_FLUSH_STOP:
+			// special case for this serialized event because we don't want to grab
+			// the PREROLL lock or check if we were flushing
+			if( nxvideosink->prv_buf )
+			{
+				gst_buffer_unref( nxvideosink->prv_buf );
+				nxvideosink->prv_buf = NULL;
+			}
+
+			if( base_class->event )
+			{
+				result = base_class->event( base_sink, event );
+			}
+			break;
+
+		default:
+			if( GST_EVENT_IS_SERIALIZED(event) )
+			{
+				GST_BASE_SINK_PREROLL_LOCK( base_sink );
+
+				if( G_UNLIKELY(base_sink->flushing) )
+				{
+					GST_DEBUG_OBJECT( base_sink, "Fail, Drop Message. ( Flushing )" );
+					GST_BASE_SINK_PREROLL_UNLOCK( base_sink );
+					gst_event_unref( event );
+
+					result = FALSE;
+					break;
+				}
+
+				if( G_UNLIKELY(base_sink->eos) )
+				{
+					GST_DEBUG_OBJECT( base_sink, "Fail, Drop Message. ( EOS )" );
+					GST_BASE_SINK_PREROLL_UNLOCK( base_sink );
+					gst_event_unref( event );
+
+					result = FALSE;
+					break;
+				}
+
+				if( base_class->event )
+				{
+					result = base_class->event( base_sink, event );
+				}
+
+				GST_BASE_SINK_PREROLL_UNLOCK( base_sink );
+			}
+			else
+			{
+				if( base_class->event )
+				{
+					result = base_class->event( base_sink, event );
+				}
+			}
+			break;
+	}
+
+	return result;
 }
 
 static GstFlowReturn
