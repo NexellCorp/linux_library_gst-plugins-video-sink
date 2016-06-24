@@ -46,7 +46,8 @@ typedef struct
 	int32_t		height;			//	Video Image's Height
 	int32_t		align;			//	Start address align
 	int32_t		planes;			//	Number of valid planes
-	uint32_t	format;			//	Pixel Format(N/A)
+	int32_t		pixel_byte;		//	Pixel Bytes
+	uint32_t	format;			//	Pixel Format
 
 	int			drm_fd;					//	Drm Device Handle
 	int			dma_fd[MAX_PLANE_NUM];	//	DMA memory Handle
@@ -66,6 +67,7 @@ struct _GstNxvideosink
 	gint	dst_x, dst_y, dst_w, dst_h;
 
 	int		drm_fd;
+	gint	drm_format;
 	guint	plane_id;
 	guint	ctrl_id;
 	guint	buffer_id[MAX_INPUT_BUFFER];

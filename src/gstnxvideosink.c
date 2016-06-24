@@ -97,7 +97,7 @@ static GstStaticPadTemplate gst_nxvideosink_sink_template =
 		GST_PAD_ALWAYS,
 		GST_STATIC_CAPS(
 			"video/x-raw, "
-			"format = (string) { I420 }, "
+			"format = (string) { I420, YUY2 }, "
 			"width = (int) [ 1, 2048 ], "
 			"height = (int) [ 1, 2048 ]; "
 		)
@@ -275,14 +275,11 @@ static int import_gem_from_flink( int fd, unsigned int flink_name )
 }
 
 static NX_VID_MEMORY*
-allocate_buffer( int drm_fd, int32_t width, int32_t height )
+allocate_buffer( int drm_fd, int32_t width, int32_t height, int32_t format )
 {
-	//
-	//	FIX ME! ( 3plane, YUV420 only )
-	//
 	int gem_fd[MAX_PLANE_NUM] = {0, };
 	int dma_fd[MAX_PLANE_NUM] = {0, };
-	int32_t i=0;
+	int32_t i=0, pixelByte=0, planes=0;
 	int32_t luStride, cStride;
 	int32_t luVStride, cVStride;
 	int32_t stride[MAX_PLANE_NUM];
@@ -293,54 +290,80 @@ allocate_buffer( int drm_fd, int32_t width, int32_t height )
 	luStride  = GST_ROUND_UP_32( width );
 	luVStride = GST_ROUND_UP_16( height );
 
-	cStride   = GST_ROUND_UP_16( luStride / 2 );
-	cVStride  = GST_ROUND_UP_16( height / 2 );
+	switch( format )
+	{
+	case DRM_FORMAT_YUV420:
+		cStride   = GST_ROUND_UP_16( luStride / 2 );
+		cVStride  = GST_ROUND_UP_16( height / 2 );
+		planes    = 3;
+		pixelByte = 1;
+		break;
 
-	//	Buffer 1
-	size[0] = luStride*luVStride;
-	stride[0] = luStride;
-	gem_fd[0] = alloc_gem(drm_fd, size[0], 0);
-	if (gem_fd[0] < 0)
-		goto ErrorExit;
-	dma_fd[0] = gem_to_dmafd(drm_fd, gem_fd[0]);
-	if (dma_fd[0] < 0)
-		goto ErrorExit;
-	buffer[0] = mmap( 0, size[0], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[0], 0 );
-	if (buffer[0] == MAP_FAILED)
-		goto ErrorExit;
+	case DRM_FORMAT_YUYV:
+		cStride   = GST_ROUND_UP_16( luStride / 2 );
+		cVStride  = GST_ROUND_UP_16( height / 2 );
+		planes    = 1;
+		pixelByte = 2;
+		break;
 
-	//	Buffer 2
-	size[1] = cStride*cVStride;
-	stride[1] = cStride;
-	gem_fd[1] = alloc_gem(drm_fd, size[1], 0);
-	if (gem_fd[1] < 0)
-		goto ErrorExit;
-	dma_fd[1] = gem_to_dmafd(drm_fd, gem_fd[1]);
-	if (dma_fd[1] < 0)
-		goto ErrorExit;
-	buffer[1] = mmap( 0, size[1], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[1], 0 );
-	if (buffer[0] == MAP_FAILED)
-		goto ErrorExit;
+	default:
+		break;
+	}
 
-	//	Buffer 3
-	size[2] = cStride*cVStride;
-	stride[2] = cStride;
-	gem_fd[2] = alloc_gem(drm_fd, size[2], 0);
-	if (gem_fd[2] < 0)
-		goto ErrorExit;
-	dma_fd[2] = gem_to_dmafd(drm_fd, gem_fd[2]);
-	if (dma_fd[2] < 0)
-		goto ErrorExit;
-	buffer[2] = mmap( 0, size[2], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[2], 0 );
-	if (buffer[0] == MAP_FAILED)
-		goto ErrorExit;
+	switch( planes )
+	{
+	case 3:
+		size[2]   = cStride*cVStride;
+		stride[2] = cStride;
+
+		gem_fd[2] = alloc_gem(drm_fd, size[2], 0);
+		if (gem_fd[2] < 0) goto ErrorExit;
+
+		dma_fd[2] = gem_to_dmafd(drm_fd, gem_fd[2]);
+		if (dma_fd[2] < 0) goto ErrorExit;
+
+		buffer[2] = mmap( 0, size[2], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[2], 0 );
+		if (buffer[0] == MAP_FAILED) goto ErrorExit;
+
+	case 2:
+		size[1]   = cStride*cVStride;
+		stride[1] = cStride;
+
+		gem_fd[1] = alloc_gem(drm_fd, size[1], 0);
+		if (gem_fd[1] < 0) goto ErrorExit;
+
+		dma_fd[1] = gem_to_dmafd(drm_fd, gem_fd[1]);
+		if (dma_fd[1] < 0) goto ErrorExit;
+
+		buffer[1] = mmap( 0, size[1], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[1], 0 );
+		if (buffer[0] == MAP_FAILED) goto ErrorExit;
+
+	case 1:
+		size[0]   = luStride*luVStride*pixelByte;
+		stride[0] = luStride*pixelByte;
+
+		gem_fd[0] = alloc_gem(drm_fd, size[0], 0);
+		if (gem_fd[0] < 0) goto ErrorExit;
+
+		dma_fd[0] = gem_to_dmafd(drm_fd, gem_fd[0]);
+		if (dma_fd[0] < 0) goto ErrorExit;
+
+		buffer[0] = mmap( 0, size[0], PROT_READ|PROT_WRITE, MAP_SHARED, dma_fd[0], 0 );
+		if (buffer[0] == MAP_FAILED) goto ErrorExit;
+
+	default:
+		break;
+	}
 
 	video_memory = (NX_VID_MEMORY *)calloc(1, sizeof(NX_VID_MEMORY));
-	video_memory->width  = width;
-	video_memory->height = height;
-	video_memory->drm_fd = drm_fd;
+	video_memory->width      = width;
+	video_memory->height     = height;
+	video_memory->planes     = planes;
+	video_memory->pixel_byte = pixelByte;
+	video_memory->format     = format;
+	video_memory->drm_fd     = drm_fd;
 
-	for( i=0 ; i<3 ; i++ )
+	for( i=0 ; i<planes ; i++ )
 	{
 		video_memory->dma_fd[i] = dma_fd[i];
 		video_memory->gem_fd[i] = gem_fd[i];
@@ -351,7 +374,7 @@ allocate_buffer( int drm_fd, int32_t width, int32_t height )
 	return video_memory;
 
 ErrorExit:
-	for( i=0 ; i<3 ; i++ )
+	for( i=0 ; i<planes ; i++ )
 	{
 		if( buffer[i] )
 		{
@@ -377,7 +400,7 @@ free_buffer( NX_VID_MEMORY *video_memory )
 	int32_t i;
 	if( video_memory )
 	{
-		for( i = 0; i < 3; i++ )
+		for( i = 0; i < video_memory->planes; i++ )
 		{
 			if( video_memory->buffer[i] )
 			{
@@ -392,32 +415,34 @@ free_buffer( NX_VID_MEMORY *video_memory )
 }
 
 static void
-copy_to_videomemory( guchar *pBuf, NX_VID_MEMORY *pImage )
+copy_to_videomemory( guchar *pBuf, NX_VID_MEMORY *video_memory )
 {
-	gint w = pImage->width;
-	gint h = pImage->height;
+	gint width = video_memory->width;
+	gint height = video_memory->height;
 	guchar *pSrc, *pDst;
 	gint i, j;
 
 	pSrc = (guchar*)pBuf;
-	pDst = (guchar*)pImage->buffer[0];
+	pDst = (guchar*)video_memory->buffer[0];
 
-	for( i = 0; i < h; i++ )
+	for( i = 0; i < height; i++ )
 	{
-		memcpy( pDst, pSrc, w );
+		memcpy( pDst, pSrc, width * video_memory->pixel_byte );
 
-		pSrc += w;
-		pDst += pImage->stride[0];
+		pSrc += width * video_memory->pixel_byte;
+		pDst += video_memory->stride[0];
 	}
 
-	for( j = 1; j < 3; j++ )
+	for( j = 1; j < video_memory->planes; j++ )
 	{
-		pDst = (guchar*)pImage->buffer[j];
-		for( i = 0; i < h / 2; i++ )
+		pDst = (guchar*)video_memory->buffer[j];
+
+		for( i = 0; i < height / 2; i++ )
 		{
-			memcpy( pDst, pSrc, w / 2 );
-			pSrc += w / 2;
-			pDst += pImage->stride[j];
+			memcpy( pDst, pSrc, width / 2 );
+
+			pSrc += width / 2;
+			pDst += video_memory->stride[j];
 		}
 	}
 }
@@ -427,25 +452,26 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 {
 	gint i = 0;
 
-	nxvideosink->width    = 0;
-	nxvideosink->height   = 0;
+	nxvideosink->width      = 0;
+	nxvideosink->height     = 0;
 
-	nxvideosink->src_x    = 0;
-	nxvideosink->src_y    = 0;
-	nxvideosink->src_w    = 0;
-	nxvideosink->src_h    = 0;
+	nxvideosink->src_x      = 0;
+	nxvideosink->src_y      = 0;
+	nxvideosink->src_w      = 0;
+	nxvideosink->src_h      = 0;
 
-	nxvideosink->dst_x    = 0;
-	nxvideosink->dst_y    = 0;
-	nxvideosink->dst_w    = 0;
-	nxvideosink->dst_h    = 0;
+	nxvideosink->dst_x      = 0;
+	nxvideosink->dst_y      = 0;
+	nxvideosink->dst_w      = 0;
+	nxvideosink->dst_h      = 0;
 
-	nxvideosink->drm_fd   = -1;
-	nxvideosink->plane_id = 17;
-	nxvideosink->ctrl_id  = 22;
-	nxvideosink->index    = 0;
-	nxvideosink->init     = FALSE;
-	nxvideosink->prv_buf  = NULL;
+	nxvideosink->drm_fd     = -1;
+	nxvideosink->drm_format = -1;
+	nxvideosink->plane_id   = 17;
+	nxvideosink->ctrl_id    = 22;
+	nxvideosink->index      = 0;
+	nxvideosink->init       = FALSE;
+	nxvideosink->prv_buf    = NULL;
 
 	for( i = 0 ; i < MAX_INPUT_BUFFER; i++ )
 	{
@@ -611,10 +637,22 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 	GST_DEBUG_OBJECT( nxvideosink, "set_caps" );
 
 	structure = gst_caps_get_structure( caps, 0 );
+
 	mime_type = gst_structure_get_name( structure );
-	if( !g_strcmp0( mime_type, "video/x-raw" ) )
+	if( g_strcmp0( mime_type, "video/x-raw" ) )
 	{
-		format = gst_structure_get_string( structure, "format" );
+		GST_ERROR("Fail, Not Support Mime Type.\n");
+		return FALSE;
+	}
+
+	format = gst_structure_get_string( structure, "format" );
+	if( !g_strcmp0( format, "I420" ) )
+	{
+		nxvideosink->drm_format = DRM_FORMAT_YUV420;
+	}
+	else if( !g_strcmp0( format, "YUY2") )
+	{
+		nxvideosink->drm_format = DRM_FORMAT_YUYV;
 	}
 	else
 	{
@@ -801,52 +839,26 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 
 			if( nxvideosink->buffer_id[mm_buf->buffer_index] == 0 )
 			{
-				guint handles[4], pitches[4], offsets[4];
+				gint i = 0;
+				guint handles[4] = { 0, };
+				guint pitches[4] = { 0, };
+				guint offsets[4] = { 0, };
+				guint offset = 0;
 
-				if( 3 == mm_buf->plane_num && 1 == mm_buf->handle_num )
+				for( i = 0; i < mm_buf->plane_num; i++ )
 				{
-					handles[0] = import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[0] );
-					handles[1] = handles[0];
-					handles[2] = handles[0];
-					handles[3] = 0;
+					handles[i] = (mm_buf->handle_num == 1) ?
+						import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[0] ) :
+						import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[i] );
 
-					pitches[0] = mm_buf->stride_width[0];
-					pitches[1] = mm_buf->stride_width[1];
-					pitches[2] = mm_buf->stride_width[2];
-					pitches[3] = 0;
+					pitches[i] = mm_buf->stride_width[i];
+					offsets[i] = offset;
 
-					offsets[0] = 0;
-					offsets[1] = offsets[0] + mm_buf->stride_width[0] * mm_buf->stride_height[0];
-					offsets[2] = offsets[1] + mm_buf->stride_width[1] * mm_buf->stride_height[1];
-					offsets[3] = 0;
-				}
-				else if( 3 == mm_buf->plane_num && 3 == mm_buf->handle_num )
-				{
-					handles[0] = import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[0] );
-					handles[1] = import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[1] );
-					handles[2] = import_gem_from_flink( nxvideosink->drm_fd, mm_buf->handle.gem[2] );
-					handles[3] = 0;
-
-					pitches[0] = mm_buf->stride_width[0];
-					pitches[1] = mm_buf->stride_width[1];
-					pitches[2] = mm_buf->stride_width[2];
-					pitches[3] = 0;
-
-					offsets[0] = 0;
-					offsets[1] = 0;
-					offsets[2] = 0;
-					offsets[3] = 0;
-				}
-				else
-				{
-					GST_ERROR("Fail, Not support plane(%d) or handle(%d)\n", mm_buf->plane_num, mm_buf->handle_num );
-					gst_memory_unmap( meta_block, &info );
-					gst_buffer_unref( buf );
-					return GST_FLOW_ERROR;
+					offset += ( (mm_buf->handle_num == 1) ? (mm_buf->stride_width[i] * mm_buf->stride_height[i]) : 0 );
 				}
 
 				err = drmModeAddFB2( nxvideosink->drm_fd, mm_buf->width[0], mm_buf->height[0],
-					DRM_FORMAT_YUV420, handles, pitches, offsets, &nxvideosink->buffer_id[mm_buf->buffer_index], 0 );
+					nxvideosink->drm_format, handles, pitches, offsets, &nxvideosink->buffer_id[mm_buf->buffer_index], 0 );
 
 				if( 0 > err )
 				{
@@ -879,7 +891,7 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 			gint i = 0;
 			for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
 			{
-				nxvideosink->video_memory[i] = allocate_buffer( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height );
+				nxvideosink->video_memory[i] = allocate_buffer( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height, nxvideosink->drm_format );
 				if( NULL == nxvideosink->video_memory[i] )
 				{
 					GST_ERROR("Fail, Allocate Buffer.\n");
@@ -896,25 +908,20 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 
 			if( nxvideosink->buffer_id[nxvideosink->index] == 0 )
 			{
-				guint handles[4], pitches[4], offsets[4];
+				gint i = 0;
+				guint handles[4] = { 0, };
+				guint pitches[4] = { 0, };
+				guint offsets[4] = { 0, };
 
-				handles[0] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[0];
-				handles[1] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[1];
-				handles[2] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[2];
-				handles[3] = 0;
-
-				pitches[0] = nxvideosink->video_memory[nxvideosink->index]->stride[0];
-				pitches[1] = nxvideosink->video_memory[nxvideosink->index]->stride[1];
-				pitches[2] = nxvideosink->video_memory[nxvideosink->index]->stride[2];
-				pitches[3] = 0;
-
-				offsets[0] = 0;
-				offsets[1] = 0;
-				offsets[2] = 0;
-				offsets[3] = 0;
+				for( i = 0; i < nxvideosink->video_memory[nxvideosink->index]->planes; i++ )
+				{
+					handles[i] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[i];
+					pitches[i] = nxvideosink->video_memory[nxvideosink->index]->stride[i];
+					offsets[i] = 0;
+				}
 
 				err = drmModeAddFB2( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height,
-					DRM_FORMAT_YUV420, handles, pitches, offsets, &nxvideosink->buffer_id[nxvideosink->index], 0 );
+					nxvideosink->drm_format, handles, pitches, offsets, &nxvideosink->buffer_id[nxvideosink->index], 0 );
 
 				if( 0 > err )
 				{
