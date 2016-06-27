@@ -24,6 +24,7 @@ libgstnxvideosink_la_LIBADD = \
 	$(GST_LIBS)			\
 	-lgstvideo-1.0		\
 	-lgstpbutils-1.0	\
+	-lnxgstmeta			\
 	-ldrm	\
 	-lkms
 
