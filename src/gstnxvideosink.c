@@ -415,36 +415,71 @@ free_buffer( NX_VID_MEMORY *video_memory )
 }
 
 static void
-copy_to_videomemory( guchar *pBuf, NX_VID_MEMORY *video_memory )
+copy_to_videomemory( GstBuffer *buffer, NX_VID_MEMORY *video_memory )
 {
-	gint width = video_memory->width;
-	gint height = video_memory->height;
 	guchar *pSrc, *pDst;
 	gint i, j;
 
-	pSrc = (guchar*)pBuf;
-	pDst = (guchar*)video_memory->buffer[0];
+	GstMapInfo info;
+	GstVideoMeta *video_meta = gst_buffer_get_video_meta( buffer );
 
-	for( i = 0; i < height; i++ )
+	gst_buffer_map( buffer, &info, GST_MAP_READ );
+
+	if( NULL != video_meta )
 	{
-		memcpy( pDst, pSrc, width * video_memory->pixel_byte );
+		pSrc = (guchar*)info.data;
+		pDst = (guchar*)video_memory->buffer[0];
 
-		pSrc += width * video_memory->pixel_byte;
-		pDst += video_memory->stride[0];
-	}
-
-	for( j = 1; j < video_memory->planes; j++ )
-	{
-		pDst = (guchar*)video_memory->buffer[j];
-
-		for( i = 0; i < height / 2; i++ )
+		for( i = 0; i < video_meta->height; i++ )
 		{
-			memcpy( pDst, pSrc, width / 2 );
+			memcpy( pDst, pSrc, video_meta->stride[0] );
 
-			pSrc += width / 2;
-			pDst += video_memory->stride[j];
+			pSrc += video_meta->stride[0];
+			pDst += video_memory->stride[0];
+		}
+
+		for( j = 1; j < video_meta->n_planes; j++ )
+		{
+			pSrc = (guchar*)info.data + video_meta->offset[j];
+			pDst = (guchar*)video_memory->buffer[j];
+
+			for( i = 0;  i < video_meta->height / 2; i ++ )
+			{
+				memcpy( pDst, pSrc, video_meta->stride[j] );
+
+				pSrc += video_meta->stride[j];
+				pDst += video_memory->stride[j];
+			}
 		}
 	}
+	else
+	{
+		pSrc = (guchar*)info.data;
+		pDst = (guchar*)video_memory->buffer[0];
+
+		for( i = 0; i < video_memory->height; i++ )
+		{
+			memcpy( pDst, pSrc, video_memory->width * video_memory->pixel_byte );
+
+			pSrc += video_memory->width * video_memory->pixel_byte;
+			pDst += video_memory->stride[0];
+		}
+
+		for( j = 1; j < video_memory->planes; j++ )
+		{
+			pDst = (guchar*)video_memory->buffer[j];
+
+			for( i = 0; i < video_memory->height / 2; i++ )
+			{
+				memcpy( pDst, pSrc, video_memory->width / 2 );
+
+				pSrc += video_memory->width / 2;
+				pDst += video_memory->stride[j];
+			}
+		}
+	}
+
+	gst_buffer_unmap( buffer, &info );
 }
 
 static void
@@ -902,50 +937,45 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 			nxvideosink->init = TRUE;
 		}
 
-		if( gst_buffer_map( buf, &info, GST_MAP_READ ) )
+		copy_to_videomemory( buf, nxvideosink->video_memory[nxvideosink->index] );
+
+		if( nxvideosink->buffer_id[nxvideosink->index] == 0 )
 		{
-			copy_to_videomemory( info.data, nxvideosink->video_memory[nxvideosink->index] );
+			gint i = 0;
+			guint handles[4] = { 0, };
+			guint pitches[4] = { 0, };
+			guint offsets[4] = { 0, };
 
-			if( nxvideosink->buffer_id[nxvideosink->index] == 0 )
+			for( i = 0; i < nxvideosink->video_memory[nxvideosink->index]->planes; i++ )
 			{
-				gint i = 0;
-				guint handles[4] = { 0, };
-				guint pitches[4] = { 0, };
-				guint offsets[4] = { 0, };
-
-				for( i = 0; i < nxvideosink->video_memory[nxvideosink->index]->planes; i++ )
-				{
-					handles[i] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[i];
-					pitches[i] = nxvideosink->video_memory[nxvideosink->index]->stride[i];
-					offsets[i] = 0;
-				}
-
-				err = drmModeAddFB2( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height,
-					nxvideosink->drm_format, handles, pitches, offsets, &nxvideosink->buffer_id[nxvideosink->index], 0 );
-
-				if( 0 > err )
-				{
-					GST_ERROR("Fail, drmModeAddFB2() ( %d ).\n", err );
-					gst_buffer_unref( buf );
-					return GST_FLOW_ERROR;
-				}
+				handles[i] = nxvideosink->video_memory[nxvideosink->index]->gem_fd[i];
+				pitches[i] = nxvideosink->video_memory[nxvideosink->index]->stride[i];
+				offsets[i] = 0;
 			}
 
-			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->ctrl_id, nxvideosink->buffer_id[nxvideosink->index], 0,
-					nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
-					nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+			err = drmModeAddFB2( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height,
+				nxvideosink->drm_format, handles, pitches, offsets, &nxvideosink->buffer_id[nxvideosink->index], 0 );
 
 			if( 0 > err )
 			{
-				GST_ERROR("Fail, drmModeSetPlane() ( %d ).\n", err );
+				GST_ERROR("Fail, drmModeAddFB2() ( %d ).\n", err );
 				gst_buffer_unref( buf );
 				return GST_FLOW_ERROR;
 			}
-
-			nxvideosink->index = (nxvideosink->index + 1) % MAX_ALLOC_BUFFER;
-
-			gst_buffer_unmap( buf, &info );
 		}
+
+		err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->ctrl_id, nxvideosink->buffer_id[nxvideosink->index], 0,
+				nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
+				nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+
+		if( 0 > err )
+		{
+			GST_ERROR("Fail, drmModeSetPlane() ( %d ).\n", err );
+			gst_buffer_unref( buf );
+			return GST_FLOW_ERROR;
+		}
+
+		nxvideosink->index = (nxvideosink->index + 1) % MAX_ALLOC_BUFFER;
 	}
 
 	if( nxvideosink->prv_buf )
