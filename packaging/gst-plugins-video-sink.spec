@@ -12,6 +12,7 @@ BuildRequires:	gstreamer1-devel
 BuildRequires:	glibc-devel
 BuildRequires:	gstreamer1-plugins-base-devel
 BuildRequires:	libdrm-devel
+BuildRequires:	nx-gst-meta-devel
 BuildRequires:	nx-video-api-devel
 
 Requires(post): /sbin/ldconfig
