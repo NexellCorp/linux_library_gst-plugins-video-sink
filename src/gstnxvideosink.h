@@ -69,7 +69,7 @@ struct _GstNxvideosink
 	int		drm_fd;
 	gint	drm_format;
 	guint	plane_id;
-	guint	ctrl_id;
+	guint	crtc_id;
 	guint	buffer_id[MAX_INPUT_BUFFER];
 	gint	index;
 	gboolean init;

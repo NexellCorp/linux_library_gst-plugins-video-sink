@@ -74,6 +74,9 @@ static GstFlowReturn gst_nxvideosink_show_frame( GstVideoSink *video_sink, GstBu
 #define MAX_DISPLAY_WIDTH	2048
 #define MAX_DISPLAY_HEIGHT	2048
 
+#define DEFAULT_PLANE_ID	17	// 26
+#define DEFAULT_CRTC_ID		22	// 31
+
 enum
 {
 	PROP_0,
@@ -87,6 +90,9 @@ enum
 	PROP_DST_Y,
 	PROP_DST_W,
 	PROP_DST_H,
+
+	PROP_PLANE_ID,
+	PROP_CRTC_ID,
 };
 
 /* pad templates */
@@ -198,6 +204,25 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 		g_param_spec_int( "dst-h", "dst-h",
 			"Destination Position Height",
 			-MAX_DISPLAY_HEIGHT, MAX_DISPLAY_HEIGHT, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	//
+	// Temperary Property
+	//
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_PLANE_ID,
+		g_param_spec_uint( "plane-id", "plane-id",
+			"DRM plane id ( temperary property )",
+			0, G_MAXUINT, DEFAULT_PLANE_ID,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_CRTC_ID,
+		g_param_spec_uint( "crtc-id", "crtc-id",
+			"DRM crtc id ( temperary property )",
+			0, G_MAXUINT, DEFAULT_CRTC_ID,
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
@@ -503,8 +528,8 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 
 	nxvideosink->drm_fd     = -1;
 	nxvideosink->drm_format = -1;
-	nxvideosink->plane_id   = 17;
-	nxvideosink->ctrl_id    = 22;
+	nxvideosink->plane_id   = DEFAULT_PLANE_ID;
+	nxvideosink->crtc_id    = DEFAULT_CRTC_ID;
 	nxvideosink->index      = 0;
 	nxvideosink->init       = FALSE;
 	nxvideosink->prv_buf    = NULL;
@@ -572,6 +597,14 @@ gst_nxvideosink_set_property (GObject * object, guint property_id,
 			nxvideosink->dst_h = g_value_get_int( value );
 			break;
 
+		case PROP_PLANE_ID:
+			nxvideosink->plane_id = g_value_get_uint( value );
+			break;
+
+		case PROP_CRTC_ID:
+			nxvideosink->crtc_id = g_value_get_uint( value );
+			break;
+
 		default:
 			G_OBJECT_WARN_INVALID_PROPERTY_ID( object, property_id, pspec );
 			break;
@@ -617,6 +650,14 @@ gst_nxvideosink_get_property (GObject * object, guint property_id,
 
 		case PROP_DST_H:
 			g_value_set_int( value, nxvideosink->dst_h );
+			break;
+
+		case PROP_PLANE_ID:
+			g_value_set_uint( value, nxvideosink->plane_id );
+			break;
+
+		case PROP_CRTC_ID:
+			g_value_set_uint( value, nxvideosink->crtc_id );
 			break;
 
 		default:
@@ -907,7 +948,7 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 				}
 			}
 
-			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->ctrl_id, nxvideosink->buffer_id[mm_buf->buffer_index], 0,
+			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[mm_buf->buffer_index], 0,
 					nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
 					nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
 
@@ -967,7 +1008,7 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 			}
 		}
 
-		err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->ctrl_id, nxvideosink->buffer_id[nxvideosink->index], 0,
+		err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[nxvideosink->index], 0,
 				nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
 				nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
 
