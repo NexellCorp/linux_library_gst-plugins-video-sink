@@ -746,13 +746,9 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 		return FALSE;
 	}
 
-	nxvideosink->src_x  = nxvideosink->src_x;
-	nxvideosink->src_y  = nxvideosink->src_y;
 	nxvideosink->src_w  = nxvideosink->src_w ? nxvideosink->src_w : nxvideosink->width;
 	nxvideosink->src_h  = nxvideosink->src_h ? nxvideosink->src_h : nxvideosink->height;
 
-	nxvideosink->dst_x  = nxvideosink->dst_x;
-	nxvideosink->dst_y  = nxvideosink->dst_y;
 	nxvideosink->dst_w  = nxvideosink->dst_w ? nxvideosink->dst_w : nxvideosink->width;
 	nxvideosink->dst_h  = nxvideosink->dst_h ? nxvideosink->dst_h : nxvideosink->height;
 
