@@ -251,7 +251,7 @@ static int drm_command_write_read( int fd, uint32_t command_index, void *data, u
 	return 0;
 }
 
-static int alloc_gem(int fd, int size, int flags)
+static int alloc_gem(int fd, uint64_t size, int flags)
 {
 	struct nx_drm_gem_create arg = { 0, };
 	int ret;
