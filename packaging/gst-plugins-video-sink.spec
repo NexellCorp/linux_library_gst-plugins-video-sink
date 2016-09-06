@@ -1,6 +1,6 @@
 Name:    gst-plugins-video-sink
-Version: 0.0.1
-Release: 0
+Version: 1.0.0
+Release: 1
 License: LGPLv2+
 Summary: nexell video sink gstreamer plugin
 Group: Development/Libraries
