@@ -74,8 +74,8 @@ static GstFlowReturn gst_nxvideosink_show_frame( GstVideoSink *video_sink, GstBu
 #define MAX_DISPLAY_WIDTH	2048
 #define MAX_DISPLAY_HEIGHT	2048
 
-#define DEFAULT_PLANE_ID	17	// 26
-#define DEFAULT_CRTC_ID		22	// 31
+#define DEFAULT_PLANE_ID	18	// 18 for kernel 4.4  17 for kernel 4.1
+#define DEFAULT_CRTC_ID		23	// 23 for kernel 4.4  22 for kernel 4.1
 
 enum
 {
