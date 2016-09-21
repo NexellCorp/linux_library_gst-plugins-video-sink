@@ -79,7 +79,7 @@ struct resources {
 static struct resources *get_resources(int fd, guint *crtc_id, guint *plane_id)
 {
 	struct resources *res;
-	int i;
+	int i = 0;
 
 	res = calloc(1, sizeof(*res));
 	if (res == 0)
