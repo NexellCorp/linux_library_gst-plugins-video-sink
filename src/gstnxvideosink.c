@@ -55,6 +55,63 @@
 #include <gstmmvideobuffermeta.h>
 #include "gstnxvideosink.h"
 
+struct crtc {
+	drmModeCrtc *crtc;
+	drmModeObjectProperties *props;
+	drmModePropertyRes **props_info;
+	drmModeModeInfo *mode;
+};
+
+struct plane {
+	drmModePlane *plane;
+	drmModeObjectProperties *props;
+	drmModePropertyRes **props_info;
+};
+
+struct resources {
+	drmModeRes *res;
+	drmModePlaneRes *plane_res;
+
+	struct crtc *crtcs;
+	struct plane *planes;
+};
+
+static struct resources *get_resources(int fd, guint *crtc_id, guint *plane_id)
+{
+	struct resources *res;
+	int i = 0;
+
+	res = calloc(1, sizeof(*res));
+	if (res == 0)
+		return NULL;
+
+	drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+
+	res->res = drmModeGetResources(fd);
+	if (!res->res) {
+		fprintf(stderr, "drmModeGetResources failed: %s\n",
+			strerror(errno));
+		goto error;
+	}
+
+	*crtc_id = res->res->crtcs[i];
+
+	res->plane_res = drmModeGetPlaneResources(fd);
+	if (!res->plane_res) {
+		fprintf(stderr, "drmModeGetPlaneResources failed: %s\n",
+			strerror(errno));
+		return res;
+	}
+
+	*plane_id = res->plane_res->planes[i];
+
+	return res;
+
+error:
+	free(res);
+	return NULL;
+}
+
 GST_DEBUG_CATEGORY_STATIC (gst_nxvideosink_debug_category);
 #define GST_CAT_DEFAULT gst_nxvideosink_debug_category
 
@@ -73,9 +130,6 @@ static GstFlowReturn gst_nxvideosink_show_frame( GstVideoSink *video_sink, GstBu
 
 #define MAX_DISPLAY_WIDTH	2048
 #define MAX_DISPLAY_HEIGHT	2048
-
-#define DEFAULT_PLANE_ID	17	// 26
-#define DEFAULT_CRTC_ID		22	// 31
 
 enum
 {
@@ -207,25 +261,6 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
-
-	//
-	// Temperary Property
-	//
-	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_PLANE_ID,
-		g_param_spec_uint( "plane-id", "plane-id",
-			"DRM plane id ( temperary property )",
-			0, G_MAXUINT, DEFAULT_PLANE_ID,
-			(GParamFlags) (G_PARAM_READWRITE)
-		)
-	);
-
-	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_CRTC_ID,
-		g_param_spec_uint( "crtc-id", "crtc-id",
-			"DRM crtc id ( temperary property )",
-			0, G_MAXUINT, DEFAULT_CRTC_ID,
-			(GParamFlags) (G_PARAM_READWRITE)
-		)
-	);
 }
 
 static int drm_ioctl( int fd, unsigned long request, void *arg )
@@ -251,7 +286,7 @@ static int drm_command_write_read( int fd, uint32_t command_index, void *data, u
 	return 0;
 }
 
-static int alloc_gem(int fd, int size, int flags)
+static int alloc_gem(int fd, uint64_t size, int flags)
 {
 	struct nx_drm_gem_create arg = { 0, };
 	int ret;
@@ -512,6 +547,7 @@ static void
 gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 {
 	gint i = 0;
+	struct resources *res = NULL;
 
 	nxvideosink->width      = 0;
 	nxvideosink->height     = 0;
@@ -528,8 +564,8 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 
 	nxvideosink->drm_fd     = -1;
 	nxvideosink->drm_format = -1;
-	nxvideosink->plane_id   = DEFAULT_PLANE_ID;
-	nxvideosink->crtc_id    = DEFAULT_CRTC_ID;
+	nxvideosink->plane_id   = -1;
+	nxvideosink->crtc_id    = -1;
 	nxvideosink->index      = 0;
 	nxvideosink->init       = FALSE;
 	nxvideosink->prv_buf    = NULL;
@@ -554,6 +590,15 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	drmSetMaster( nxvideosink->drm_fd );
 
 	gst_pad_set_event_function( GST_VIDEO_SINK_PAD(nxvideosink), gst_nxvideosink_event );
+	/* get default crtc, plane ids
+	 * default ids are going be the first detected ids
+	 */
+	res = get_resources(nxvideosink->drm_fd, &nxvideosink->crtc_id,
+			&nxvideosink->plane_id);
+	if (!res) {
+		GST_ERROR("Fail, get drm resource().\n");
+		return;
+	}
 }
 
 void
@@ -746,13 +791,9 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 		return FALSE;
 	}
 
-	nxvideosink->src_x  = nxvideosink->src_x;
-	nxvideosink->src_y  = nxvideosink->src_y;
 	nxvideosink->src_w  = nxvideosink->src_w ? nxvideosink->src_w : nxvideosink->width;
 	nxvideosink->src_h  = nxvideosink->src_h ? nxvideosink->src_h : nxvideosink->height;
 
-	nxvideosink->dst_x  = nxvideosink->dst_x;
-	nxvideosink->dst_y  = nxvideosink->dst_y;
 	nxvideosink->dst_w  = nxvideosink->dst_w ? nxvideosink->dst_w : nxvideosink->width;
 	nxvideosink->dst_h  = nxvideosink->dst_h ? nxvideosink->dst_h : nxvideosink->height;
 

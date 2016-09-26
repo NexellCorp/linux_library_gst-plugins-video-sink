@@ -2,7 +2,7 @@ dnl required version of autoconf
 AC_PREREQ([2.53])
 
 dnl Package Name is gstnxvideosink version 0.1.0
-AC_INIT(gstnxvideosink,[0.1.0])
+AC_INIT(gstnxvideosink,[1.0.1])
 
 dnl required versions of gstreamer and plugins-base
 GST_REQUIRED=1.0.0
