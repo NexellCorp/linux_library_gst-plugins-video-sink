@@ -599,6 +599,8 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 		GST_ERROR("Fail, get drm resource().\n");
 		return;
 	}
+
+	free(res);
 }
 
 void
