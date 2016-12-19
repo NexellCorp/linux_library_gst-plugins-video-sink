@@ -745,6 +745,12 @@ gst_nxvideosink_finalize (GObject * object)
 		nxvideosink->drm_fd = -1;
 	}
 
+	if( nxvideosink->prv_buf )
+	{
+		gst_buffer_unref( nxvideosink->prv_buf );
+		nxvideosink->prv_buf = NULL;
+	}
+
 	G_OBJECT_CLASS (gst_nxvideosink_parent_class)->finalize (object);
 }
 
