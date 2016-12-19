@@ -95,6 +95,7 @@ static struct resources *get_resources(int fd, guint *crtc_id, guint *plane_id)
 	}
 
 	*crtc_id = res->res->crtcs[i];
+	drmModeFreeResources(res->res);
 
 	res->plane_res = drmModeGetPlaneResources(fd);
 	if (!res->plane_res) {
@@ -104,6 +105,7 @@ static struct resources *get_resources(int fd, guint *crtc_id, guint *plane_id)
 	}
 
 	*plane_id = res->plane_res->planes[i];
+	drmModeFreePlaneResources(res->plane_res);
 
 	return res;
 
