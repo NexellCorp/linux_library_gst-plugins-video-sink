@@ -75,6 +75,8 @@ struct _GstNxvideosink
 	gboolean init;
 
 	NX_VID_MEMORY *video_memory[MAX_INPUT_BUFFER];
+	NX_VID_MEMORY *extra_video_buf;
+	guint	extra_video_buf_id;
 	GstBuffer *prv_buf;
 };
 

@@ -55,6 +55,10 @@
 #include <gstmmvideobuffermeta.h>
 #include "gstnxvideosink.h"
 
+#ifndef ALIGN
+#define  ALIGN(X,N) ( (X+N-1) & (~(N-1)) )
+#endif
+
 struct crtc {
 	drmModeCrtc *crtc;
 	drmModeObjectProperties *props;
@@ -578,6 +582,9 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 		nxvideosink->video_memory[i] = NULL;
 	}
 
+	nxvideosink->extra_video_buf = NULL;
+	nxvideosink->extra_video_buf_id = -1;
+
 	//
 	// FIX ME!! ( DO NOT MOVE THIS CODE )
 	//   It is seems to be bugs.
@@ -753,6 +760,13 @@ gst_nxvideosink_finalize (GObject * object)
 		nxvideosink->prv_buf = NULL;
 	}
 
+	if(nxvideosink->extra_video_buf)
+	{
+		free_buffer( nxvideosink->extra_video_buf );
+		nxvideosink->extra_video_buf = NULL;
+		nxvideosink->extra_video_buf_id = -1;
+	}
+
 	G_OBJECT_CLASS (gst_nxvideosink_parent_class)->finalize (object);
 }
 
@@ -842,6 +856,52 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 	return TRUE;
 }
 
+static gint copy_buf_to_extrabuf( GstNxvideosink *nxvideosink, MMVideoBuffer *mm_buf)
+{
+	guint8 *plu = NULL;
+	guint8 *pcb = NULL;
+	guint8 *pcr = NULL;
+	gint luStride = 0;
+	gint luVStride = 0;
+	gint cStride = 0;
+	gint cVStride = 0;
+
+	if(nxvideosink->extra_video_buf->format == DRM_FORMAT_YUYV)
+	{
+		if(mm_buf->data[0] && (mm_buf->plane_num == 1) )
+		{
+			memcpy( nxvideosink->extra_video_buf->buffer[0], mm_buf->data[0], nxvideosink->extra_video_buf->size[0] );
+		}
+		else
+		{
+			return -1;
+		}
+	}
+	else if(nxvideosink->extra_video_buf->format == DRM_FORMAT_YUV420)
+	{
+		if(mm_buf->data[0] && (mm_buf->plane_num == 3) )
+		{
+			luStride = ALIGN(nxvideosink->extra_video_buf->width, 32);
+			luVStride = ALIGN(nxvideosink->extra_video_buf->height, 16);
+			cStride = luStride/2;
+			cVStride = ALIGN(nxvideosink->extra_video_buf->height/2, 16);
+
+			plu = (guint8 *)mm_buf->data[0];
+			pcb = plu + luStride * luVStride;
+			pcr = pcb + cStride * cVStride;
+			memcpy( nxvideosink->extra_video_buf->buffer[0], plu, nxvideosink->extra_video_buf->size[0] );
+			memcpy( nxvideosink->extra_video_buf->buffer[1], pcb, nxvideosink->extra_video_buf->size[1] );
+			memcpy( nxvideosink->extra_video_buf->buffer[2], pcr, nxvideosink->extra_video_buf->size[2] );
+		}
+		else
+		{
+			return -1;
+		}
+	}
+
+  return 0;
+}
+
 static gboolean
 gst_nxvideosink_event( GstPad *pad, GstObject *parent, GstEvent *event )
 {
@@ -855,7 +915,63 @@ gst_nxvideosink_event( GstPad *pad, GstObject *parent, GstEvent *event )
 
 	switch( GST_EVENT_TYPE( event ) )
 	{
+		int32_t err = 0;
 		case GST_EVENT_FLUSH_STOP:
+
+			//
+			// Copies the prv_buf into extra_video_buf.
+			// Display extra_video_buf.
+			if(nxvideosink->extra_video_buf &&
+				nxvideosink->prv_buf &&
+				nxvideosink->extra_video_buf_id >= 0)
+			{
+				GstMapInfo info;
+				GstMMVideoBufferMeta *meta = NULL;
+
+				meta = gst_buffer_get_mmvideobuffer_meta( nxvideosink->prv_buf );
+				if( NULL != meta && meta->memory_index >= 0 )
+				{
+					GstMMVideoBufferMeta *meta = NULL;
+					meta = gst_buffer_get_mmvideobuffer_meta( nxvideosink->prv_buf );
+
+					GstMemory *meta_block = NULL;
+					MMVideoBuffer *mm_buf = NULL;
+
+					meta_block = gst_buffer_peek_memory( nxvideosink->prv_buf, meta->memory_index );
+					if( !meta_block )
+					{
+						GST_ERROR("Fail, prv_buf: gst_buffer_peek_memory().\n");
+					}
+
+					memset(&info, 0, sizeof(GstMapInfo));
+					gst_memory_map(meta_block, &info, GST_MAP_READ);
+
+					mm_buf = (MMVideoBuffer*)info.data;
+					if( !mm_buf )
+					{
+						GST_ERROR("Fail, prv_buf: get MMVideoBuffer.\n");
+					}
+					else
+					{
+						int32_t ret = 0;
+						ret = copy_buf_to_extrabuf( nxvideosink, mm_buf);
+						if(ret == 0)
+						{
+							err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->extra_video_buf_id, 0,
+									nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
+									nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+
+							if( 0 > err )
+							{
+								GST_ERROR("Fail, extra_video_buf drmModeSetPlane() ( %s ).\n", strerror(err) );
+							}
+						}
+					}
+					gst_memory_unmap( meta_block, &info );
+				}
+			}
+
+			//
 			// special case for this serialized event because we don't want to grab
 			// the PREROLL lock or check if we were flushing
 			if( nxvideosink->prv_buf )
@@ -996,6 +1112,35 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 					gst_memory_unmap( meta_block, &info );
 					gst_buffer_unref( buf );
 					return GST_FLOW_ERROR;
+				}
+
+				//
+				// create extra_video_buf
+				if( nxvideosink->extra_video_buf == NULL)
+				{
+					nxvideosink->extra_video_buf = allocate_buffer( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height, nxvideosink->drm_format );
+
+					for( i = 0; i < nxvideosink->extra_video_buf->planes; i++ )
+					{
+						handles[i] = nxvideosink->extra_video_buf->gem_fd[i];
+						pitches[i] = nxvideosink->extra_video_buf->stride[i];
+						offsets[i] = 0;
+					}
+
+					err = drmModeAddFB2( nxvideosink->drm_fd, nxvideosink->extra_video_buf->width, nxvideosink->extra_video_buf->height,
+						nxvideosink->drm_format, handles, pitches, offsets, &nxvideosink->extra_video_buf_id, 0 );
+
+					if( 0 > err )
+					{
+						GST_ERROR("Fail, extra_video_buf drmModeAddFB2() ( %s ).\n", strerror(err) );
+
+						if(nxvideosink->extra_video_buf)
+						{
+							free_buffer( nxvideosink->extra_video_buf );
+							nxvideosink->extra_video_buf = NULL;
+							nxvideosink->extra_video_buf_id = -1;
+						}
+					}
 				}
 			}
 
