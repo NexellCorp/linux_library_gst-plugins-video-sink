@@ -59,6 +59,9 @@
 #define  ALIGN(X,N) ( (X+N-1) & (~(N-1)) )
 #endif
 
+#define INIT_PLANE_ID 0
+#define INIT_CRTC_ID 0
+
 struct crtc {
 	drmModeCrtc *crtc;
 	drmModeObjectProperties *props;
@@ -264,6 +267,22 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 		g_param_spec_int( "dst-h", "dst-h",
 			"Destination Position Height",
 			-MAX_DISPLAY_HEIGHT, MAX_DISPLAY_HEIGHT, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_PLANE_ID,
+		g_param_spec_uint( "plane-id", "plane-id",
+			"DRM plane id (user can set it manually)",
+			0, G_MAXUINT, INIT_PLANE_ID,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_CRTC_ID,
+		g_param_spec_uint( "crtc-id", "crtc-id",
+			"DRM crtc id (user can set it manually)",
+			0, G_MAXUINT, INIT_CRTC_ID,
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
@@ -553,7 +572,6 @@ static void
 gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 {
 	gint i = 0;
-	struct resources *res = NULL;
 
 	nxvideosink->width      = 0;
 	nxvideosink->height     = 0;
@@ -570,8 +588,8 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 
 	nxvideosink->drm_fd     = -1;
 	nxvideosink->drm_format = -1;
-	nxvideosink->plane_id   = -1;
-	nxvideosink->crtc_id    = -1;
+	nxvideosink->plane_id   = INIT_PLANE_ID;
+	nxvideosink->crtc_id    = INIT_CRTC_ID;
 	nxvideosink->index      = 0;
 	nxvideosink->init       = FALSE;
 	nxvideosink->prv_buf    = NULL;
@@ -599,17 +617,6 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	drmSetMaster( nxvideosink->drm_fd );
 
 	gst_pad_set_event_function( GST_VIDEO_SINK_PAD(nxvideosink), gst_nxvideosink_event );
-	/* get default crtc, plane ids
-	 * default ids are going be the first detected ids
-	 */
-	res = get_resources(nxvideosink->drm_fd, &nxvideosink->crtc_id,
-			&nxvideosink->plane_id);
-	if (!res) {
-		GST_ERROR("Fail, get drm resource().\n");
-		return;
-	}
-
-	free(res);
 }
 
 void
@@ -779,6 +786,7 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 
 	const gchar *mime_type;
 	const gchar *format;
+	struct resources *res = NULL;
 
 	GST_DEBUG_OBJECT( nxvideosink, "set_caps" );
 
@@ -826,6 +834,26 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 		nxvideosink->src_x, nxvideosink->src_y, nxvideosink->src_w, nxvideosink->src_h,
 		nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h
 	);
+
+	/* get default crtc, plane ids
+	 * default ids are going be the first detected ids
+	 */
+	GST_DEBUG_OBJECT( nxvideosink, "crtc id=%d\n", nxvideosink->crtc_id);
+
+	/*
+	 * if user didn't specify both crtc and plane id, we get one from
+	 * kernel
+	 */
+	if (nxvideosink->crtc_id == INIT_CRTC_ID || nxvideosink->plane_id ==
+			INIT_PLANE_ID) {
+		res = get_resources(nxvideosink->drm_fd, &nxvideosink->crtc_id,
+				&nxvideosink->plane_id);
+		if (!res) {
+			GST_ERROR("Fail, get drm resource().\n");
+			return -1;
+			}
+		free(res);
+	}
 
 	//
 	//
