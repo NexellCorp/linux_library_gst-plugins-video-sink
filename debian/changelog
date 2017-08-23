@@ -1,3 +1,11 @@
+gst-plugins-video-sink (1.0.6) xenial; urgency=medium
+
+  * add EOS handler
+  * add CRTC and plane property
+  * add for flush implementation
+
+ -- Hwansoon Sung <hs2704.sung@hs2704.sung@samsung.com>  Wed, 23 Aug 2017 15:16:21 +0900
+
 gst-plugins-video-sink (1.0.3) unstable; urgency=medium
 
   * Initial release
