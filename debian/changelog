@@ -1,3 +1,9 @@
+gst-plugins-video-sink (1.0.7) xenial; urgency=medium
+
+  * revert commit "add EOS handler(bc4ed4b)"
+
+ -- Hwansoon Sung <hs2704.sung@hs2704.sung@samsung.com>  Wed, 24 Aug 2017 17:00:11 +0900
+
 gst-plugins-video-sink (1.0.6) xenial; urgency=medium
 
   * add EOS handler
