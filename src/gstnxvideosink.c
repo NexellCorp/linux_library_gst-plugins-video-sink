@@ -1013,13 +1013,7 @@ gst_nxvideosink_event( GstPad *pad, GstObject *parent, GstEvent *event )
 				result = base_class->event( base_sink, event );
 			}
 			break;
-		case GST_EVENT_EOS:
-			gst_nxvideosink_finalize(parent);
-			GST_BASE_SINK_PREROLL_LOCK( base_sink );
-			if( base_class->event )
-				result = base_class->event( base_sink, event );
-			GST_BASE_SINK_PREROLL_UNLOCK( base_sink );
-			break;
+
 		default:
 			if( GST_EVENT_IS_SERIALIZED(event) )
 			{
@@ -1028,6 +1022,16 @@ gst_nxvideosink_event( GstPad *pad, GstObject *parent, GstEvent *event )
 				if( G_UNLIKELY(base_sink->flushing) )
 				{
 					GST_DEBUG_OBJECT( base_sink, "Fail, Drop Message. ( Flushing )" );
+					GST_BASE_SINK_PREROLL_UNLOCK( base_sink );
+					gst_event_unref( event );
+
+					result = FALSE;
+					break;
+				}
+
+				if( G_UNLIKELY(base_sink->eos) )
+				{
+					GST_DEBUG_OBJECT( base_sink, "Fail, Drop Message. ( EOS )" );
 					GST_BASE_SINK_PREROLL_UNLOCK( base_sink );
 					gst_event_unref( event );
 
