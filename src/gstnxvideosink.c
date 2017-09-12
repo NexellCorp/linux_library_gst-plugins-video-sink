@@ -1147,6 +1147,11 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 				if( nxvideosink->extra_video_buf == NULL)
 				{
 					nxvideosink->extra_video_buf = allocate_buffer( nxvideosink->drm_fd, nxvideosink->width, nxvideosink->height, nxvideosink->drm_format );
+					if(NULL == nxvideosink->extra_video_buf)
+					{
+						GST_ERROR("Fail, Allocate Buffer.\n");
+						return FALSE;
+					}
 
 					for( i = 0; i < nxvideosink->extra_video_buf->planes; i++ )
 					{
