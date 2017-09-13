@@ -1,3 +1,9 @@
+gst-plugins-video-sink (1.0.8) xenial; urgency=medium
+
+  * Add Null check
+
+ -- Chanho Park <chanho61.park@samsung.com>  Wed, 13 Sep 2017 13:15:51 +0900
+
 gst-plugins-video-sink (1.0.7) xenial; urgency=medium
 
   * revert commit "add EOS handler(bc4ed4b)"
