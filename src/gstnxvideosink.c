@@ -261,6 +261,22 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_PLANE_ID,
+		g_param_spec_uint( "plane-id","plane-id",
+			"Drm PlaneId",
+			0, 100, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_CRTC_ID,
+		g_param_spec_uint( "crtc-id","crtc-id",
+			"Drm CrtcId",
+			0, 100, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
 }
 
 static int drm_ioctl( int fd, unsigned long request, void *arg )
