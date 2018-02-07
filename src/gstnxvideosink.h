@@ -70,6 +70,7 @@ struct _GstNxvideosink
 	gint	drm_format;
 	guint	plane_id;
 	guint	crtc_id;
+	guint	last_hw_buffer_enable;
 	guint	buffer_id[MAX_INPUT_BUFFER];
 	gint	index;
 	gboolean init;
@@ -78,6 +79,7 @@ struct _GstNxvideosink
 	NX_VID_MEMORY *extra_video_buf;
 	guint	extra_video_buf_id;
 	GstBuffer *prv_buf;
+	GstBuffer *lastbuf;
 };
 
 struct _GstNxvideosinkClass
