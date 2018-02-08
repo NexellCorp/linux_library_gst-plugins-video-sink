@@ -1,3 +1,9 @@
+gst-plugins-video-sink (1.0.9) xenial; urgency=medium
+
+  * Add hw buffer property
+
+ -- Hwansoon Sung <hs2704.sung@samsung.com>  Thu, 08 Feb 2018 15:07:44 +0900
+
 gst-plugins-video-sink (1.0.8) xenial; urgency=medium
 
   * Add Null check
