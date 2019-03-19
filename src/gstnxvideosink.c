@@ -76,41 +76,6 @@ struct resources {
 	struct plane *planes;
 };
 
-static struct resources *get_resources(int fd, guint *crtc_id, guint *plane_id)
-{
-	struct resources *res;
-	int i = 0;
-
-	res = calloc(1, sizeof(*res));
-	if (res == 0)
-		return NULL;
-
-	drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
-
-	res->res = drmModeGetResources(fd);
-	if (!res->res) {
-		fprintf(stderr, "drmModeGetResources failed: %s\n",
-			strerror(errno));
-		goto error;
-	}
-
-	*crtc_id = res->res->crtcs[i];
-
-	res->plane_res = drmModeGetPlaneResources(fd);
-	if (!res->plane_res) {
-		fprintf(stderr, "drmModeGetPlaneResources failed: %s\n",
-			strerror(errno));
-		return res;
-	}
-
-	*plane_id = res->plane_res->planes[i];
-
-	return res;
-
-error:
-	free(res);
-	return NULL;
-}
 
 GST_DEBUG_CATEGORY_STATIC (gst_nxvideosink_debug_category);
 #define GST_CAT_DEFAULT gst_nxvideosink_debug_category
@@ -147,6 +112,9 @@ enum
 
 	PROP_PLANE_ID,
 	PROP_CRTC_ID,
+#if TEST_CONNECT
+	PROP_CRTC_INDEX,
+#endif
 };
 
 /* pad templates */
@@ -187,7 +155,7 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 		"S5P6818 H/W Video Renderer",
 		"Renderer/Video",
 		"Nexell H/W Video Renderer for S5P6818",
-		"Biela.Jo <doriya@nexell.co.kr>"
+		"Hyun Chul Jun <hcjun@nexell.co.kr>"
 	);
 
 	gobject_class->set_property = gst_nxvideosink_set_property;
@@ -277,6 +245,245 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
+
+#if TEST_CONNECT
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_CRTC_INDEX,
+		g_param_spec_uint( "crtc-index","crtc-index",
+			"Drm CrtcInDex",
+			0, 100, 0,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+#endif
+}
+
+#if TEST_CONNECT
+static uint32_t find_crtc_for_encoder(const drmModeRes *pResources, const drmModeEncoder *pEncoder)
+{
+	int i = 0;
+
+	for (i = 0; i < pResources->count_crtcs; i++)
+	{
+		/* possible_crtcs is a bitmask as described here:
+		 * https://dvdhrm.wordpress.com/2012/09/13/linux-drm-mode-setting-api
+		 */
+		const uint32_t crtc_mask = 1 << i;
+		const uint32_t crtc_id = pResources->crtcs[i];
+		if (pEncoder->possible_crtcs & crtc_mask)
+		{
+			return crtc_id;
+		}
+	}
+
+	/* no match found */
+	return -1;
+}
+
+static uint32_t find_crtc_for_connector(int drmFd, const drmModeRes *pResources, const drmModeConnector *pConnector)
+{
+	int i = 0;
+
+	for (i = 0; i < pConnector->count_encoders; i++)
+	{
+		const uint32_t encoder_id = pConnector->encoders[i];
+		drmModeEncoder *pEncoder = drmModeGetEncoder(drmFd, encoder_id);
+
+		if (pEncoder)
+		{
+			const uint32_t crtc_id = find_crtc_for_encoder(pResources, pEncoder);
+
+			drmModeFreeEncoder(pEncoder);
+			if (crtc_id != 0)
+			{
+				return crtc_id;
+			}
+		}
+	}
+
+	/* no match found */
+	return -1;
+}
+
+// drmMode: 1 => usrConnectorID
+//          0 => autoConnectorID
+static drmModeConnector* init_drm_set_mode(GstNxvideosink *nxvideosink, int drm_fd, drmModeRes *pResources, int drmMode, int usrConnectorID)
+{
+	int i, area;
+	drmModeConnector *pConnector = NULL;
+
+	/* find a connected connector: */
+	for (i = 0; i < pResources->count_connectors; i++)
+	{
+		pConnector = drmModeGetConnector(drm_fd, pResources->connectors[i]);
+		if (drmMode)
+		{
+			if ((pConnector->connector_id == usrConnectorID) && (pConnector->connection == DRM_MODE_CONNECTED))
+			{
+				/* it's connected, let's use this! */
+				break;
+			}
+		}
+		else
+		{
+			if (pConnector->connection == DRM_MODE_CONNECTED)
+			{
+				/* it's connected, let's use this! */
+				if(pResources->count_connectors == (i)) //lcd
+//				if(pResources->count_connectors == (i+1)) //hdmi
+					break;
+			}
+		}
+		drmModeFreeConnector(pConnector);
+		pConnector = NULL;
+	}
+
+	if (!pConnector)
+	{
+		/* we could be fancy and listen for hotplug events and wait for
+		 * a connector..
+		 */
+		GST_ERROR("no connected connector!, count_connectors(%d), usrConnectorID(%d), drmMode(%d)\n",
+			pResources->count_connectors, usrConnectorID, drmMode);
+		return NULL;
+	}
+	else
+	{
+		GST_DEBUG_OBJECT(nxvideosink,"connected connector!, count_connectors(%d), connector_id(%d), usrConnectorID(%d), drmMode(%d)\n",
+						pResources->count_connectors, pConnector->connector_id, usrConnectorID, drmMode);
+	}
+
+	/* find prefered mode or the highest resolution mode: */
+	for (i = 0, area = 0; i < pConnector->count_modes; i++)
+	{
+		drmModeModeInfo *pCurrent_mode = &pConnector->modes[i];
+
+		if (pCurrent_mode->type & DRM_MODE_TYPE_PREFERRED)
+		{
+			nxvideosink->pCurrent_mode = (void *)pCurrent_mode;
+		}
+
+		int current_area = pCurrent_mode->hdisplay * pCurrent_mode->vdisplay;
+
+		if (current_area > area) {
+			nxvideosink->pCurrent_mode = (void *)pCurrent_mode;
+			area = current_area;
+		}
+	}
+	return pConnector;
+}
+
+static int init_drm_find_encoder(int drmFd, drmModeRes *pResources, drmModeConnector *pConnector,
+								int *pCrtcID, int *pConnectorID)
+{
+	drmModeEncoder *pEncoder = NULL;
+	int i;
+
+	/* find encoder: */
+	for (i = 0; i < pResources->count_encoders; i++)
+	{
+		pEncoder = drmModeGetEncoder(drmFd, pResources->encoders[i]);
+
+		if (pEncoder->encoder_id == pConnector->encoder_id)
+		{
+			break;
+		}
+		drmModeFreeEncoder(pEncoder);
+		pEncoder = NULL;
+	}
+
+	if (pEncoder)
+	{
+		*pCrtcID = pEncoder->crtc_id;
+	}
+	else
+	{
+		uint32_t crtc_id = find_crtc_for_connector(drmFd, pResources, pConnector);
+		if (crtc_id == 0)
+		{
+			GST_ERROR("no crtc found!\n");
+			return -1;
+		}
+
+		*pCrtcID = crtc_id;
+	}
+
+	*pConnectorID = pConnector->connector_id;
+
+	return  0;
+}
+
+static int init_drm(GstNxvideosink *nxvideosink, int drmFd, drmModeRes *pDrmResources, int drmMode, int usrConnectorID, int *pCrtcID, int *pConnectorID)
+{
+	drmModeConnector *pConnector = NULL;
+	int ret = 0;
+
+	pConnector = init_drm_set_mode(nxvideosink, drmFd, pDrmResources, drmMode, usrConnectorID);
+	if(pConnector == NULL)
+	{
+		GST_ERROR("Error: init_drm_set_mode() !!!\n");
+		return -1;
+	}
+
+	ret = init_drm_find_encoder(drmFd, pDrmResources, pConnector, pCrtcID, pConnectorID);
+	if(ret != 0)
+	{
+		GST_ERROR("Error: init_drm_find_encoder() !!!\n");
+		return -1;
+	}
+
+	return 0;
+}
+#endif
+
+static int32_t find_video_plane( int fd, int crtcIdx, uint32_t *connId, uint32_t *crtcId, uint32_t *planeId )
+{
+	uint32_t possible_crtcs = 0;
+	drmModeRes *res;
+	drmModePlaneRes *pr;
+	drmModePlane *plane;
+	uint32_t i, j;
+	int32_t found = 0;
+
+	res = drmModeGetResources(fd);
+
+	if( crtcIdx >= res->count_crtcs )
+	{
+		goto ErrorExit;
+	}
+
+	*crtcId = res->crtcs[ crtcIdx ];
+	*connId = res->connectors[ crtcIdx ];
+
+	possible_crtcs = 1<<crtcIdx;
+
+	drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+	pr = drmModeGetPlaneResources( fd );
+
+	for( i=0 ; i<pr->count_planes ; ++i )
+	{
+		plane = drmModeGetPlane( fd, pr->planes[i] );
+		if( plane->possible_crtcs & possible_crtcs )
+		{
+			for( j=0 ; j<plane->count_formats ; j++ )
+			{
+				if( plane->formats[j]==DRM_FORMAT_YUV420 ||
+					plane->formats[j]==DRM_FORMAT_YVU420 ||
+					plane->formats[j]==DRM_FORMAT_UYVY ||
+					plane->formats[j]==DRM_FORMAT_VYUY ||
+					plane->formats[j]==DRM_FORMAT_YVYU ||
+					plane->formats[j]==DRM_FORMAT_YUYV )
+				{
+					found = 1;
+					*planeId = plane->plane_id;
+				}
+			}
+		}
+	}
+	drmModeFreeResources(res);
+	return found?0:-1;
+ErrorExit:
+	drmModeFreeResources(res);
+	return -1;
 }
 
 static int drm_ioctl( int fd, unsigned long request, void *arg )
@@ -563,6 +770,8 @@ static void
 gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 {
 	gint i = 0;
+	uint32_t connId = 0;
+
 	struct resources *res = NULL;
 
 	nxvideosink->width      = 0;
@@ -582,6 +791,7 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	nxvideosink->drm_format = -1;
 	nxvideosink->plane_id   = -1;
 	nxvideosink->crtc_id    = -1;
+	nxvideosink->crtc_index = 0;  //display number
 	nxvideosink->index      = 0;
 	nxvideosink->init       = FALSE;
 	nxvideosink->prv_buf    = NULL;
@@ -606,14 +816,26 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	drmSetMaster( nxvideosink->drm_fd );
 
 	gst_pad_set_event_function( GST_VIDEO_SINK_PAD(nxvideosink), gst_nxvideosink_event );
+
+#if TEST_CONNECT
+	{
+		int CrtcID; int ConnectorID;
+		drmModeRes *pDrmRes;
+		pDrmRes = drmModeGetResources(nxvideosink->drm_fd);
+		init_drm(nxvideosink, nxvideosink->drm_fd, pDrmRes, 0, 0, &CrtcID, &ConnectorID);
+	}
+#endif
+
 	/* get default crtc, plane ids
 	 * default ids are going be the first detected ids
 	 */
-	res = get_resources(nxvideosink->drm_fd, &nxvideosink->crtc_id,
-			&nxvideosink->plane_id);
-	if (!res) {
-		GST_ERROR("Fail, get drm resource().\n");
-		return;
+	if( 0 == find_video_plane(nxvideosink->drm_fd, nxvideosink->crtc_index, &connId, &nxvideosink->crtc_id, &nxvideosink->plane_id) )
+	{
+		GST_DEBUG_OBJECT(nxvideosink, "VIDEO : connId = %d, crtcId = %d, planeId = %d\n", connId, nxvideosink->crtc_id, nxvideosink->plane_id);
+	}
+	else
+	{
+		GST_DEBUG_OBJECT(nxvideosink, "cannot found video format for %dth crtc\n", nxvideosink->crtc_index );
 	}
 }
 
@@ -666,6 +888,11 @@ gst_nxvideosink_set_property (GObject * object, guint property_id,
 			nxvideosink->crtc_id = g_value_get_uint( value );
 			break;
 
+#if TEST_CONNECT
+		case PROP_CRTC_INDEX:
+			nxvideosink->crtc_index = g_value_get_uint( value );
+			break;
+#endif
 		default:
 			G_OBJECT_WARN_INVALID_PROPERTY_ID( object, property_id, pspec );
 			break;
@@ -720,6 +947,11 @@ gst_nxvideosink_get_property (GObject * object, guint property_id,
 		case PROP_CRTC_ID:
 			g_value_set_uint( value, nxvideosink->crtc_id );
 			break;
+#if TEST_CONNECT
+		case PROP_CRTC_INDEX:
+			g_value_set_uint( value, nxvideosink->crtc_index );
+			break;
+#endif
 
 		default:
 			G_OBJECT_WARN_INVALID_PROPERTY_ID( object, property_id, pspec );
@@ -757,6 +989,12 @@ gst_nxvideosink_finalize (GObject * object)
 	{
 		drmClose( nxvideosink->drm_fd );
 		nxvideosink->drm_fd = -1;
+	}
+
+	if( nxvideosink->prv_buf )
+	{
+		gst_buffer_unref( nxvideosink->prv_buf );
+		nxvideosink->prv_buf = NULL;
 	}
 
 	G_OBJECT_CLASS (gst_nxvideosink_parent_class)->finalize (object);
@@ -1003,6 +1241,13 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 					gst_buffer_unref( buf );
 					return GST_FLOW_ERROR;
 				}
+
+#if TEST_CONNECT
+			int32_t connectorID = 43;
+//			int32_t connectorID = 41;
+			err = drmModeSetCrtc(nxvideosink->drm_fd, nxvideosink->crtc_id, nxvideosink->buffer_id[mm_buf->buffer_index], 0, 0,
+					&connectorID, 1, (drmModeModeInfo *)nxvideosink->pCurrent_mode);
+#endif
 			}
 
 			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[mm_buf->buffer_index], 0,
@@ -1107,10 +1352,10 @@ plugin_init (GstPlugin * plugin)
 #define VERSION "0.1.0"
 #endif
 #ifndef PACKAGE
-#define PACKAGE "S5P6818 GStreamer PlugIn"
+#define PACKAGE "S5PXX18/NXP4330/NXP322X GStreamer PlugIn"
 #endif
 #ifndef PACKAGE_NAME
-#define PACKAGE_NAME "S5P6818 GStreamer PlugIn"
+#define PACKAGE_NAME "S5PXX18/NXP4330/NXP322X GStreamer PlugIn"
 #endif
 #ifndef GST_PACKAGE_ORIGIN
 #define GST_PACKAGE_ORIGIN "http://www.nexell.co.kr"
@@ -1120,7 +1365,7 @@ GST_PLUGIN_DEFINE(
 	GST_VERSION_MAJOR,
 	GST_VERSION_MINOR,
 	nxvideosink,
-	"Nexell H/W Video Renderer for S5P6818",
+	"Nexell H/W Video Renderer for S5PXX18/NXP4330/NXP322X",
 	plugin_init, VERSION,
 	"LGPL",
 	PACKAGE_NAME,

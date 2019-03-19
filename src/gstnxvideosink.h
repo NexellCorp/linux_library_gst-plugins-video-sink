@@ -25,6 +25,8 @@
 
 #include <stdint.h>
 
+#define TEST_CONNECT 0
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_NXVIDEOSINK   (gst_nxvideosink_get_type())
@@ -70,12 +72,15 @@ struct _GstNxvideosink
 	gint	drm_format;
 	guint	plane_id;
 	guint	crtc_id;
+	guint	crtc_index;
 	guint	buffer_id[MAX_INPUT_BUFFER];
 	gint	index;
 	gboolean init;
 
 	NX_VID_MEMORY *video_memory[MAX_INPUT_BUFFER];
 	GstBuffer *prv_buf;
+
+	drmModeModeInfo *pCurrent_mode;
 };
 
 struct _GstNxvideosinkClass
