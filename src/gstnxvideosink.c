@@ -881,11 +881,11 @@ gst_nxvideosink_set_property (GObject * object, guint property_id,
 			break;
 
 		case PROP_PLANE_ID:
-			nxvideosink->plane_id = g_value_get_uint( value );
+//			nxvideosink->plane_id = g_value_get_uint( value );
 			break;
 
 		case PROP_CRTC_ID:
-			nxvideosink->crtc_id = g_value_get_uint( value );
+//			nxvideosink->crtc_id = g_value_get_uint( value );
 			break;
 
 #if TEST_CONNECT
