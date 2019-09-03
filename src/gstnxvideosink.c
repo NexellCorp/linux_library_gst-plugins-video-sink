@@ -132,6 +132,59 @@ static GstStaticPadTemplate gst_nxvideosink_sink_template =
 		)
 	);
 
+static GstStaticPadTemplate gst_nxvideosink_sink_template_nxp3220 =
+	GST_STATIC_PAD_TEMPLATE( "sink",
+		GST_PAD_SINK,
+		GST_PAD_ALWAYS,
+		GST_STATIC_CAPS(
+			"video/x-raw, "
+			"format = (string) { I420, YUY2, NV12 }, "
+			"width = (int) [ 1, 2048 ], "
+			"height = (int) [ 1, 2048 ]; "
+		)
+	);
+
+///////////////////////////////////////////////////////////////////////////////
+static gint IsCpuNXP322X()
+{
+    FILE *pFileCpuInfo = NULL;
+    char *pCpuInfoBuf = NULL;
+    int32_t cpuInfoLen = 0;
+    int32_t findStream = 0;
+    char *pFindStream = NULL;
+
+    pFileCpuInfo = fopen( "/proc/cpuinfo", "rb" );
+    if(pFileCpuInfo == NULL)
+    {
+        GST_ERROR("Error File Open!\n");
+        return findStream;
+    }
+    pCpuInfoBuf = (char *)malloc(4096);
+    if(pCpuInfoBuf == NULL)
+    {
+        GST_ERROR("Error malloc!\n");
+        if(pFileCpuInfo)
+            fclose(pFileCpuInfo);
+        return findStream;
+    }
+
+    cpuInfoLen = fread(pCpuInfoBuf, sizeof(char), 4096, pFileCpuInfo);
+    pFindStream = strstr(pCpuInfoBuf, "nxp322x");
+    if(pFindStream)
+    {
+        findStream = 1;  //nxp322x
+    }
+
+    if(pFileCpuInfo)
+        fclose(pFileCpuInfo);
+
+    if(pCpuInfoBuf)
+        free(pCpuInfoBuf);
+
+    return findStream;
+}
+
+
 /* class initialization */
 
 G_DEFINE_TYPE_WITH_CODE (GstNxvideosink, gst_nxvideosink, GST_TYPE_VIDEO_SINK,
@@ -148,13 +201,23 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 	/* Setting up pads and setting metadata should be moved to
 		 base_class_init if you intend to subclass this class. */
 
-	gst_element_class_add_pad_template( GST_ELEMENT_CLASS(klass),
-			gst_static_pad_template_get(&gst_nxvideosink_sink_template) );
+	if( IsCpuNXP322X() )
+	{
+		gst_element_class_add_pad_template( GST_ELEMENT_CLASS(klass),
+				gst_static_pad_template_get(&gst_nxvideosink_sink_template_nxp3220) );
+
+	}
+	else
+	{
+		gst_element_class_add_pad_template( GST_ELEMENT_CLASS(klass),
+				gst_static_pad_template_get(&gst_nxvideosink_sink_template) );
+
+	}
 
 	gst_element_class_set_static_metadata( GST_ELEMENT_CLASS(klass),
-		"S5P6818 H/W Video Renderer",
+		"S5PXX18/NXP4330/NXP322X H/W Video Renderer",
 		"Renderer/Video",
-		"Nexell H/W Video Renderer for S5P6818",
+		"Nexell H/W Video Renderer for S5PXX18/NXP4330/NXP322X",
 		"Hyun Chul Jun <hcjun@nexell.co.kr>"
 	);
 
@@ -1029,6 +1092,18 @@ gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps )
 	else if( !g_strcmp0( format, "YUY2") )
 	{
 		nxvideosink->drm_format = DRM_FORMAT_YUYV;
+	}
+	if( IsCpuNXP322X() )
+	{
+		if( !g_strcmp0( format, "NV12") )
+		{
+			nxvideosink->drm_format = DRM_FORMAT_NV12;
+		}
+		else
+		{
+			GST_ERROR("Fail, Not Support Format.\n");
+			return FALSE;
+		}
 	}
 	else
 	{
