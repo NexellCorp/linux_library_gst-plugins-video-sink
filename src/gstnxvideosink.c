@@ -95,6 +95,10 @@ static gboolean gst_nxvideosink_set_caps( GstBaseSink *base_sink, GstCaps *caps 
 static gboolean gst_nxvideosink_event( GstPad *pad, GstObject *parent, GstEvent *event );
 
 static GstFlowReturn gst_nxvideosink_show_frame( GstVideoSink *video_sink, GstBuffer *buf );
+static GstStateChangeReturn gst_nxvideosink_change_state (GstElement * element, GstStateChange transition);
+
+static int32_t gst_nxvideosink_drm_open( GstNxvideosink *nxvideosink );
+static void gst_nxvideosink_drm_close( GstNxvideosink *nxvideosink );
 
 #define MAX_DISPLAY_WIDTH	2048
 #define MAX_DISPLAY_HEIGHT	2048
@@ -200,23 +204,26 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 	GstBaseSinkClass *base_sink_class = GST_BASE_SINK_CLASS( klass );
 	GstVideoSinkClass *video_sink_class = GST_VIDEO_SINK_CLASS( klass );
 
+	GstElementClass *element_class = GST_ELEMENT_CLASS (klass);
+	element_class->change_state = gst_nxvideosink_change_state;
+
 	/* Setting up pads and setting metadata should be moved to
 		 base_class_init if you intend to subclass this class. */
 
 	if( IsCpuNXP322X() )
 	{
-		gst_element_class_add_pad_template( GST_ELEMENT_CLASS(klass),
+		gst_element_class_add_pad_template( element_class,
 				gst_static_pad_template_get(&gst_nxvideosink_sink_template_nxp3220) );
 
 	}
 	else
 	{
-		gst_element_class_add_pad_template( GST_ELEMENT_CLASS(klass),
+		gst_element_class_add_pad_template( element_class,
 				gst_static_pad_template_get(&gst_nxvideosink_sink_template) );
 
 	}
 
-	gst_element_class_set_static_metadata( GST_ELEMENT_CLASS(klass),
+	gst_element_class_set_static_metadata( element_class,
 		"S5PXX18/NXP4330/NXP322X H/W Video Renderer",
 		"Renderer/Video",
 		"Nexell H/W Video Renderer for S5PXX18/NXP4330/NXP322X",
@@ -693,15 +700,102 @@ static int32_t DspVideoSetPriority(int drm_fd, int plane_id, int32_t priority)
 	return res;
 }
 
-
-static void
-gst_nxvideosink_init( GstNxvideosink *nxvideosink )
+static int32_t
+gst_nxvideosink_drm_open( GstNxvideosink *nxvideosink )
 {
 	gint i = 0;
 	uint32_t connId = 0;
 
-	struct resources *res = NULL;
+	GST_DEBUG_OBJECT( nxvideosink, "gst_nxvideosink_drm_open" );
 
+	nxvideosink->width      = 0;
+	nxvideosink->height     = 0;
+
+	nxvideosink->drm_fd     = -1;
+	nxvideosink->drm_format = -1;
+	nxvideosink->crtc_index = 0;  //display number
+	nxvideosink->index      = 0;
+	nxvideosink->init       = FALSE;
+	nxvideosink->prv_buf    = NULL;
+
+	for( i = 0 ; i < MAX_INPUT_BUFFER; i++ )
+	{
+		nxvideosink->buffer_id[i] = 0;
+		nxvideosink->video_memory[i] = NULL;
+	}
+
+	//
+	// FIX ME!! ( DO NOT MOVE THIS CODE )
+	//   It is seems to be bugs.
+	//   If this drmOpen() is called late than another drmOpen(), drmModeSetPlane() is failed.
+	//
+	nxvideosink->drm_fd = drmOpen( "nexell", NULL );
+	if( 0 > nxvideosink->drm_fd )
+	{
+		GST_ERROR("Fail, drmOpen().\n");
+		return -1;
+	}
+
+	drmSetMaster( nxvideosink->drm_fd );
+
+	/* get default crtc, plane ids
+	 * default ids are going be the first detected ids
+	 */
+	if( 0 == find_video_plane(nxvideosink->drm_fd, nxvideosink->crtc_index, &connId, &nxvideosink->crtc_id, &nxvideosink->plane_id) )
+	{
+		GST_DEBUG_OBJECT(nxvideosink, "VIDEO : connId = %d, crtcId = %d, planeId = %d\n", connId, nxvideosink->crtc_id, nxvideosink->plane_id);
+	}
+	else
+	{
+		GST_DEBUG_OBJECT(nxvideosink, "cannot found video format for %dth crtc\n", nxvideosink->crtc_index );
+		return -1;
+	}
+	return 0;
+}
+
+static void
+gst_nxvideosink_drm_close (GstNxvideosink *nxvideosink)
+{
+	gint i;
+
+	GST_DEBUG_OBJECT( nxvideosink, "gst_nxvideosink_drm_close" );
+
+	/* clean up object here */
+	for( i = 0; i < MAX_INPUT_BUFFER; i++ )
+	{
+		if( 0 < nxvideosink->buffer_id[i] )
+		{
+			drmModeRmFB( nxvideosink->drm_fd, nxvideosink->buffer_id[i] );
+			nxvideosink->buffer_id[i] = 0;
+		}
+	}
+
+	for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
+	{
+		if( NULL != nxvideosink->video_memory[i] )
+		{
+			free_buffer( nxvideosink->video_memory[i] );
+			nxvideosink->video_memory[i] = NULL;
+		}
+	}
+
+	if( 0 <= nxvideosink->drm_fd )
+	{
+		drmClose( nxvideosink->drm_fd );
+		nxvideosink->drm_fd = -1;
+	}
+
+	if( nxvideosink->prv_buf )
+	{
+		gst_buffer_unref( nxvideosink->prv_buf );
+		nxvideosink->prv_buf = NULL;
+	}
+}
+
+
+static void
+gst_nxvideosink_init( GstNxvideosink *nxvideosink )
+{
 	nxvideosink->width      = 0;
 	nxvideosink->height     = 0;
 
@@ -725,37 +819,7 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	nxvideosink->prv_buf    = NULL;
 	nxvideosink->layer_priority = 2;
 
-	for( i = 0 ; i < MAX_INPUT_BUFFER; i++ )
-	{
-		nxvideosink->buffer_id[i] = 0;
-		nxvideosink->video_memory[i] = NULL;
-	}
-
-	//
-	// FIX ME!! ( DO NOT MOVE THIS CODE )
-	//   It is seems to be bugs.
-	//   If this drmOpen() is called late than another drmOpen(), drmModeSetPlane() is failed.
-	//
-	nxvideosink->drm_fd = drmOpen( "nexell", NULL );
-	if( 0 > nxvideosink->drm_fd )
-	{
-		GST_ERROR("Fail, drmOpen().\n");
-	}
-
-	drmSetMaster( nxvideosink->drm_fd );
-
 	gst_pad_set_event_function( GST_VIDEO_SINK_PAD(nxvideosink), gst_nxvideosink_event );
-	/* get default crtc, plane ids
-	 * default ids are going be the first detected ids
-	 */
-	if( 0 == find_video_plane(nxvideosink->drm_fd, nxvideosink->crtc_index, &connId, &nxvideosink->crtc_id, &nxvideosink->plane_id) )
-	{
-		GST_DEBUG_OBJECT(nxvideosink, "VIDEO : connId = %d, crtcId = %d, planeId = %d\n", connId, nxvideosink->crtc_id, nxvideosink->plane_id);
-	}
-	else
-	{
-		GST_DEBUG_OBJECT(nxvideosink, "cannot found video format for %dth crtc\n", nxvideosink->crtc_index );
-	}
 }
 
 void
@@ -895,35 +959,7 @@ gst_nxvideosink_finalize (GObject * object)
 
 	GST_DEBUG_OBJECT( nxvideosink, "finalize" );
 
-	/* clean up object here */
-	for( i = 0; i < MAX_INPUT_BUFFER; i++ )
-	{
-		if( 0 < nxvideosink->buffer_id[i] )
-		{
-			drmModeRmFB( nxvideosink->drm_fd, nxvideosink->buffer_id[i] );
-			nxvideosink->buffer_id[i] = 0;
-		}
-	}
-
-	for( i = 0; i < MAX_ALLOC_BUFFER; i++ )
-	{
-		if( NULL != nxvideosink->video_memory[i] )
-		{
-			free_buffer( nxvideosink->video_memory[i] );
-		}
-	}
-
-	if( 0 <= nxvideosink->drm_fd )
-	{
-		drmClose( nxvideosink->drm_fd );
-		nxvideosink->drm_fd = -1;
-	}
-
-	if( nxvideosink->prv_buf )
-	{
-		gst_buffer_unref( nxvideosink->prv_buf );
-		nxvideosink->prv_buf = NULL;
-	}
+	gst_nxvideosink_drm_close(nxvideosink);
 
 	G_OBJECT_CLASS (gst_nxvideosink_parent_class)->finalize (object);
 }
@@ -1277,6 +1313,44 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 	}
 
 	nxvideosink->prv_buf = buf;
+
+	return ret;
+}
+
+static GstStateChangeReturn
+gst_nxvideosink_change_state (GstElement * element, GstStateChange transition)
+{
+	GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
+	GstNxvideosink *nxvideosink = GST_NXVIDEOSINK (element);
+
+	switch (transition)
+	{
+		case GST_STATE_CHANGE_NULL_TO_READY:
+			/* open the device */
+			GST_DEBUG_OBJECT( nxvideosink, "sGST_STATE_CHANGE_NULL_TO_READY" );
+			if( gst_nxvideosink_drm_open(nxvideosink) )
+			{
+				return GST_STATE_CHANGE_FAILURE;
+			}
+			break;
+		default:
+			break;
+	}
+
+	ret = GST_ELEMENT_CLASS (gst_nxvideosink_parent_class)->change_state (element, transition);
+
+	switch (transition)
+	{
+		case GST_STATE_CHANGE_PAUSED_TO_READY:
+			GST_DEBUG_OBJECT( nxvideosink, "GST_STATE_CHANGE_PAUSED_TO_READY" );
+			break;
+		case GST_STATE_CHANGE_READY_TO_NULL:
+			GST_DEBUG_OBJECT( nxvideosink, "GST_STATE_CHANGE_READY_TO_NULL" );
+			gst_nxvideosink_drm_close(nxvideosink);
+			break;
+		default:
+			break;
+	}
 
 	return ret;
 }
