@@ -121,6 +121,7 @@ enum
 	PROP_CRTC_ID,
 //	PROP_CRTC_INDEX,
 	PROP_LAYER_PRIORITY,
+	PROP_DRM_NONBLOCK,
 };
 
 /* pad templates */
@@ -333,6 +334,14 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 		g_param_spec_uint( "layer-priority","layer-priority",
 			"Priority value of video layer",
 			0, 2, 2,
+			(GParamFlags) (G_PARAM_READWRITE)
+		)
+	);
+
+	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_DRM_NONBLOCK,
+		g_param_spec_uint( "drm-nonblock","drm-nonblock",
+			"Drm Mode NonBlock",
+			0, 1, 0,
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
@@ -818,6 +827,7 @@ gst_nxvideosink_init( GstNxvideosink *nxvideosink )
 	nxvideosink->init       = FALSE;
 	nxvideosink->prv_buf    = NULL;
 	nxvideosink->layer_priority = 2;
+	nxvideosink->drm_nonblock = 0;
 
 	gst_pad_set_event_function( GST_VIDEO_SINK_PAD(nxvideosink), gst_nxvideosink_event );
 }
@@ -881,6 +891,9 @@ gst_nxvideosink_set_property (GObject * object, guint property_id,
 			nxvideosink->layer_priority = g_value_get_uint( value );
 			break;
 
+		case PROP_DRM_NONBLOCK:
+			nxvideosink->drm_nonblock = g_value_get_uint( value );
+
 		default:
 			G_OBJECT_WARN_INVALID_PROPERTY_ID( object, property_id, pspec );
 			break;
@@ -943,6 +956,10 @@ gst_nxvideosink_get_property (GObject * object, guint property_id,
 
 		case PROP_LAYER_PRIORITY:
 			g_value_set_uint( value, nxvideosink->layer_priority );
+			break;
+
+		case PROP_DRM_NONBLOCK:
+			g_value_set_uint( value, nxvideosink->drm_nonblock );
 			break;
 
 		default:
@@ -1154,7 +1171,7 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 	GstFlowReturn ret = GST_FLOW_OK;
 	GstMapInfo info;
 
-	gint err;
+	gint err = 0;
 
 	GST_DEBUG_OBJECT( nxvideosink, "show_frame" );
 
@@ -1234,9 +1251,18 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 				}
 			}
 
-			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[mm_buf->buffer_index], 0,
+			if(nxvideosink->drm_nonblock)
+			{
+				err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[mm_buf->buffer_index], DRM_MODE_ATOMIC_NONBLOCK,
 					nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
 					nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+			}
+			else
+			{
+				err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[mm_buf->buffer_index], 0,
+					nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
+					nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+			}
 
 			if( 0 > err )
 			{
