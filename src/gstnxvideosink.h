@@ -77,6 +77,8 @@ struct _GstNxvideosink
 
 	//	Video Layer's Priority Value
 	guint	layer_priority;
+	//	Drm Mode nonBlock
+	gint 	drm_nonblock;
 
 	NX_VID_MEMORY *video_memory[MAX_INPUT_BUFFER];
 	GstBuffer *prv_buf;
