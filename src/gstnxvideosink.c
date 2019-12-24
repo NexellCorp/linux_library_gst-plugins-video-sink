@@ -893,6 +893,7 @@ gst_nxvideosink_set_property (GObject * object, guint property_id,
 
 		case PROP_DRM_NONBLOCK:
 			nxvideosink->drm_nonblock = g_value_get_uint( value );
+			break;
 
 		default:
 			G_OBJECT_WARN_INVALID_PROPERTY_ID( object, property_id, pspec );
@@ -1319,9 +1320,18 @@ gst_nxvideosink_show_frame( GstVideoSink * sink, GstBuffer * buf )
 			}
 		}
 
-		err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[nxvideosink->index], 0,
+		if(nxvideosink->drm_nonblock)
+		{
+			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[nxvideosink->index], DRM_MODE_ATOMIC_NONBLOCK,
 				nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
 				nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+		}
+		else
+		{
+			err = drmModeSetPlane( nxvideosink->drm_fd, nxvideosink->plane_id, nxvideosink->crtc_id, nxvideosink->buffer_id[nxvideosink->index], 0,
+				nxvideosink->dst_x, nxvideosink->dst_y, nxvideosink->dst_w, nxvideosink->dst_h,
+				nxvideosink->src_x << 16, nxvideosink->src_y << 16, nxvideosink->src_w << 16, nxvideosink->src_h << 16 );
+		}
 
 		if( 0 > err )
 		{
