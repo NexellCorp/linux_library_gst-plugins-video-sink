@@ -119,7 +119,7 @@ enum
 
 	PROP_PLANE_ID,
 	PROP_CRTC_ID,
-//	PROP_CRTC_INDEX,
+	PROP_CRTC_INDEX,
 	PROP_LAYER_PRIORITY,
 	PROP_DRM_NONBLOCK,
 };
@@ -319,7 +319,6 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 		)
 	);
 
-#if 0
 	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_CRTC_INDEX,
 		g_param_spec_uint( "crtc-index","crtc-index",
 			"Drm CrtcInDex",
@@ -327,8 +326,6 @@ gst_nxvideosink_class_init (GstNxvideosinkClass * klass)
 			(GParamFlags) (G_PARAM_READWRITE)
 		)
 	);
-#endif
-
 
 	g_object_class_install_property( G_OBJECT_CLASS (klass), PROP_LAYER_PRIORITY,
 		g_param_spec_uint( "layer-priority","layer-priority",
@@ -722,7 +719,6 @@ gst_nxvideosink_drm_open( GstNxvideosink *nxvideosink )
 
 	nxvideosink->drm_fd     = -1;
 	nxvideosink->drm_format = -1;
-	nxvideosink->crtc_index = 0;  //display number
 	nxvideosink->index      = 0;
 	nxvideosink->init       = FALSE;
 	nxvideosink->prv_buf    = NULL;
@@ -881,11 +877,9 @@ gst_nxvideosink_set_property (GObject * object, guint property_id,
 //			nxvideosink->crtc_id = g_value_get_uint( value );
 			break;
 
-#if 0
 		case PROP_CRTC_INDEX:
 			nxvideosink->crtc_index = g_value_get_uint( value );
 			break;
-#endif
 
 		case PROP_LAYER_PRIORITY:
 			nxvideosink->layer_priority = g_value_get_uint( value );
@@ -949,11 +943,10 @@ gst_nxvideosink_get_property (GObject * object, guint property_id,
 		case PROP_CRTC_ID:
 			g_value_set_uint( value, nxvideosink->crtc_id );
 			break;
-#if 0
+
 		case PROP_CRTC_INDEX:
 			g_value_set_uint( value, nxvideosink->crtc_index );
 			break;
-#endif
 
 		case PROP_LAYER_PRIORITY:
 			g_value_set_uint( value, nxvideosink->layer_priority );
